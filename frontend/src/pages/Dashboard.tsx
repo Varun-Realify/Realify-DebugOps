@@ -19,7 +19,7 @@ const OUTCOME: Record<string, { label: string; cls: string }> = {
   cancelled: { label: 'Cancelled', cls: 'bg-line text-muted' }, closed: { label: 'PR closed', cls: 'bg-line text-muted' },
 }
 
-export function OutcomeBadge({ status }: { status: string }) {
+function OutcomeBadge({ status }: { status: string }) {
   const o = OUTCOME[status] ?? { label: status, cls: 'bg-line text-muted' }
   return <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${o.cls}`}>{o.label}</span>
 }

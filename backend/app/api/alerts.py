@@ -64,7 +64,8 @@ async def handle_alarm(db: AsyncSession, alarm: dict) -> dict:
     if bug is None:
         bug = Bug(repository_id=repo.id, source="aws_alarm", fingerprint=fp, severity="high", status="new",
                   title=f"Production alarm: {name}"[:500], description=text, affected_files=[],
-                  data={"alarm": name, "region": alarm.get("Region"), "account": alarm.get("AWSAccountId"), "labels": ["incident"]})
+                  data={"alarm": name, "region": alarm.get("Region"), "account": alarm.get("AWSAccountId"),
+                        "since": alarm.get("StateChangeTime"), "labels": ["incident"]})
         db.add(bug)
         await db.flush()
         start = True

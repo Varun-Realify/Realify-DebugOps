@@ -2,7 +2,7 @@
 
 Autonomous AI debugging and QA platform. Architecture and roadmap: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-**Status:** all phases (0–8) implemented. DebugOps finds bugs (GitHub issues plus automated scans), investigates them with AI agents, proposes fixes that the platform itself validates, and opens pull requests for humans to review and merge.
+**Status:** all phases (0–8) implemented, plus the AWS DevOps Agent integration for production incidents (tested against a mock; needs a real token to go live). DebugOps finds bugs (GitHub issues, developer reports, automated scans, CloudWatch alarms), investigates them with AI agents, proposes fixes that the platform itself validates, and opens pull requests for humans to review and merge.
 
 | Document | For |
 |---|---|
@@ -15,6 +15,27 @@ Autonomous AI debugging and QA platform. Architecture and roadmap: [docs/ARCHITE
 | [docs/API.md](docs/API.md) | REST and WebSocket API reference (generated) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | design and decisions |
 | [docs/AWS_DEVOPS_AGENT.md](docs/AWS_DEVOPS_AGENT.md) | AWS DevOps Agent (MCP) for production incidents: status, setup, security |
+
+## How it works
+
+```
+GitHub issue / developer report / scan ─┐
+CloudWatch alarm ─▶ SNS ────────────────┤
+                                        ▼
+                     classify: incident │ bug │ feature
+                        │                └──────┴──────────────┐
+                        ▼                                      ▼
+           AWS DevOps Agent investigates           Claude Code (isolated worktree + sandbox)
+           (logs, metrics, traces, deploys)  ───▶  analyse ─▶ root cause ─▶ fix ─▶ regression test
+                                                                       ▼
+                       DebugOps validates (fail before / pass after), security scan, independent review
+                                                                       ▼
+                                   pull request ─▶ developer reviews and merges ─▶ your CI/CD deploys
+```
+
+- **Manual workflow:** a developer opens a GitHub issue (or reports a bug in DebugOps). Production incidents go to AWS DevOps Agent first; ordinary bugs and feature requests go straight to Claude Code.
+- **Automatic workflow:** a CloudWatch alarm notifies SNS, DebugOps opens an incident and the same pipeline runs.
+- DebugOps never merges, deploys or changes infrastructure. Every fix is a PR a human reviews.
 
 ## Run with Docker Compose
 
@@ -113,7 +134,7 @@ Open the bug and click **Investigate with AI**. The **Task Details** page opens:
 
 | Part of the screen | What you see |
 |---|---|
-| **Stages** (left) | Each step ticks off as it completes: triage, code analysis, investigation, root cause, fix, regression test, validation, security, review, report, pull request |
+| **Stages** (left) | Each step ticks off as it completes: classification, AWS investigation (incidents only), code analysis, investigation, root cause, fix, regression test, validation, security, review, report, pull request |
 | **Live feed** (centre) | Every file the agents read, every edit, every command and test run, and their reasoning, as it happens |
 | **Code changes** tab | The diff of the fix and the new regression test |
 | **Tests** tab | DebugOps' own proof: the new test **fails** on the original code, **passes** with the fix, and no other test breaks |
@@ -135,6 +156,15 @@ A run usually takes 5–15 minutes; the first is slower while dependencies insta
 - **System errors** (sidebar, admin) lists everything that went wrong.
 - Full logs: `docker compose logs -f worker api`.
 - When the AI cannot prove a fix (for example, the tests cannot run), the task ends as **Needs human** with a report explaining why. It never opens an unverified PR.
+
+### Optional: the production-incident path (AWS DevOps Agent)
+
+1. Create an access token (scope **operate**, client type **agent**) for your Agent Space in the AWS DevOps Agent web app (Settings → Access Tokens; an admin must first enable access tokens), add `DEVOPS_AGENT_TOKEN=…` (and `DEVOPS_AGENT_REGION`) to `.env`, then `docker compose up -d`.
+2. Run `docker compose exec api python -m app.cli devops-agent-check`. It must print `ok: connected`.
+3. In DebugOps, **Integrations → Run connectivity check → Enable incident workflow**.
+4. Create an issue with the labels **bug** and **incident**, import it, and click **Investigate with AI**. The task shows type **Incident** and an **AWS investigation** stage with the agent's live journal before Claude Code starts.
+
+For alarms to arrive automatically, see [docs/AWS_DEVOPS_AGENT.md](docs/AWS_DEVOPS_AGENT.md#automatic-workflow-cloudwatch--sns--debugops).
 
 ### Optional: live GitHub events
 
@@ -158,7 +188,7 @@ With `--no-webhook` you use **Import issues** and **Refresh**. For new issues an
 | Manage users, view audit log | ✓ | | |
 | Sync GitHub, enable repos, test access, repository scan settings | ✓ | | |
 
-More permissions arrive with later phases (see the RBAC matrix in the architecture doc).
+Admins also manage integrations (AWS DevOps Agent connectivity check and enable/disable).
 
 ## Security behavior
 
@@ -195,7 +225,9 @@ cd ../frontend && npm run dev                    # http://localhost:5174, proxie
 
 New migration: `uv run alembic revision --autogenerate -m "..."`, review the file, then `uv run alembic check`.
 
-## Backup (interim; full guide in Phase 8)
+## Backup
+
+Full guide, including scripted backup/restore and secret rotation: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ```bash
 docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -Fc "$POSTGRES_DB"' > debugops-$(date +%F).dump

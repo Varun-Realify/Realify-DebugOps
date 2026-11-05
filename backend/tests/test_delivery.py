@@ -10,7 +10,6 @@ import pytest
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.db import SessionLocal
 from app.github.client import GitHubApp, get_github
 from app.main import app
 from app.models import ActivityEvent, Bug, Evidence, Job, PullRequest, Repository, Role, WorkflowRun

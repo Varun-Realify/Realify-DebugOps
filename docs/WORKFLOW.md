@@ -2,22 +2,25 @@
 
 **Detect bug or developer reports bug → AI investigates → finds root cause → fixes code → runs tests → creates PR → developer reviews, approves and merges → CI/CD deploys → production health is watched.**
 
-Bugs arrive three ways: automated scans, GitHub issues, or a developer's report in DebugOps (**Bugs → Report bug**, with stack traces and log files). One engine handles all of them. Start a run from a bug's page with **Investigate with AI**, or tick "Start AI investigation now" when reporting.
+Bugs arrive from automated scans, GitHub issues, a developer's report in DebugOps (**Bugs → Report bug**, with stack traces and log files), CloudWatch alarms (via SNS) and failed post-deploy health checks. One engine handles all of them. Start a run from a bug's page with **Investigate with AI**, or tick "Start AI investigation now" when reporting; alarms can start runs automatically.
+
+Each task is classified first. **Production incidents** are investigated by AWS DevOps Agent before any code is read; ordinary **bugs** and **feature requests** go straight to Claude Code. Both paths then follow the same steps: investigate → fix → test → review → PR.
 
 ```
-intake ─▶ context ─▶ analysis ─▶ investigation ─▶ root-cause gate ─▶ fix ─▶ testing ─▶ validation ─▶ security ─▶ review ─▶ report ─▶ human approval ─▶ pull request ─▶ (human merge, CI)
-              ▲                                            │             ▲                  │            │          │
-              │                                            └──needs human│◀── retry gate ◀──┴────────────┴──────────┘ (max 3 attempts)
+intake ─▶ aws_investigation ─▶ context ─▶ analysis ─▶ investigation ─▶ root-cause gate ─▶ fix ─▶ testing ─▶ validation ─▶ security ─▶ review ─▶ report ─▶ human approval ─▶ pull request ─▶ (human merge, CI)
+(classify)  (incidents only)                                               │               ▲                  │            │          │
+                                                                           └─needs human   └── retry gate ◀───┴────────────┴──────────┘ (max 3 attempts)
 ```
 
 | Stage | Who | What happens | Trust rule |
 |---|---|---|---|
-| intake | Bug Hunter (Claude API) | Triage of auto-detected findings; likely false positives stop here | Only stops on high confidence |
-| context | platform | Fetches the latest default branch into the persistent clone, creates the task worktree on branch `debugops/run-N`, copies it into a fresh sandbox, installs test dependencies | Token never enters the sandbox; the shared clone is never mounted into it |
-| analysis | Code Analyst (Claude Code, read-only) | Maps relevant files, symbols, dependencies | Output is input to Investigation, which must verify it |
+| intake | platform rules, then Claude API; Bug Hunter for scan findings | Classifies the task as **incident**, **bug** or **feature** (alarm/health-check sources and labels such as `incident`, `prod`, `outage`, `sev1`, `p0` decide first; the AI decides only when no rule applies, preferring *bug*). Scan findings are triaged; likely false positives stop here | Triage only stops a run on high confidence |
+| aws_investigation | AWS DevOps Agent (MCP), driven by the worker | Incidents only, and only when the integration is enabled: starts an investigation, streams its journal live, stores findings and recommendations | Findings are untrusted input for later agents, never executed. A failed or timed-out investigation does not stop the run |
+| context | platform | Fetches the latest default branch into the persistent clone, creates the task worktree on branch `debugops/dbg-NNN-<title>`, copies it into a fresh sandbox, installs test dependencies | Token never enters the sandbox; the shared clone is never mounted into it |
+| analysis | Code Analyst (Claude Code, read-only) | Maps relevant files, symbols, dependencies (for incidents, starting from the AWS findings) | Output is input to Investigation, which must verify it |
 | investigation | Investigation (Claude Code, read-only + test commands) | Up to 3 root-cause hypotheses with file:line evidence | Every citation is checked against the source; invented ones are discarded |
 | root-cause gate | platform | Needs one hypothesis with verified evidence and confidence ≥ 0.6 | Otherwise the run ends **needs human** with a report |
-| fix | Fix agent (Claude Code, edit) | Minimal source change | Edits to tests are reverted automatically |
+| fix | Fix agent (Claude Code, edit) | Minimal source change (for a feature: the requested behaviour) | Edits to tests are reverted automatically |
 | testing | Testing agent (Claude Code, edit) | Writes a regression test | Edits to non-test code are reverted; deleting tests is undone |
 | validation | **platform** | Runs the suite 3 ways: original code; original code + new test; fix + new test | **Verified** only if the new test fails before the fix, passes after it, and no previously passing test breaks. Suites without per-test results are **unverifiable**, and the run never auto-opens a PR |
 | security | Semgrep + Gitleaks on changed files, plus the Security agent | New high/critical findings block the change | Agent claims count only if concrete (high/critical, in a changed file) |
@@ -42,8 +45,8 @@ Failed validation, a security block, or "changes requested" sends feedback to th
 | 2 | Never clone again if it exists | Created only if missing; afterwards only fetched. If the repository is renamed or transferred, the remote URL is updated instead of re-cloning |
 | 3 | Fetch and pull the latest base branch before every task | `git fetch --prune` runs before every scan and every debugging run (and again when a run resumes); the base commit is resolved from the freshly fetched branch |
 | 4 | Never modify the shared base branch | The clone has no local base branch at all: base branches exist only as `refs/remotes/origin/*`, updated only by fetching from GitHub. PRs target the base branch; DebugOps never pushes to it and cannot merge |
-| 5 | Isolated branch or worktree per task | Each run gets its own worktree on its own branch `debugops/run-N`; each scan gets a detached worktree `scan-N`. Inside the sandbox the agents work on that branch |
-| 6 | Change code only in the isolated workspace | Agents edit only inside the sandbox copy of the task worktree. The validated files become a new commit on `debugops/run-N`. Nothing writes to the shared clone's history |
+| 5 | Isolated branch or worktree per task | Each run gets its own worktree on its own branch `debugops/dbg-NNN-<title>`; each scan gets a detached worktree `scan-N`. Inside the sandbox the agents work on that branch |
+| 6 | Change code only in the isolated workspace | Agents edit only inside the sandbox copy of the task worktree. The validated files become a new commit on `debugops/dbg-NNN-<title>`. Nothing writes to the shared clone's history |
 | 7 | Run relevant tests before a PR | Validation runs the suite on the original code, the original code plus the new regression test, and the fix; plus security scans and an independent review. A PR is only possible after a **verified** result |
 | 8 | Never merge or deploy without human approval | A Reviewer/Admin approves PR creation; merging happens only by a human in GitHub; there is no merge or deploy code path |
 | 9 | Preserve uncommitted changes; never overwrite others' work | A worktree with uncommitted changes is never removed. If a `debugops/` branch already exists on GitHub and its tip is not this run's own commit, PR creation stops and asks for a human instead of overwriting it |

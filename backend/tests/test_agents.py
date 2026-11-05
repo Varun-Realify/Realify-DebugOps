@@ -12,7 +12,7 @@ from app.agents.llm import AgentError, AnthropicLLM
 from app.agents.schemas import FixResult, ReviewVerdict
 from app.config import get_settings
 from app.db import SessionLocal
-from app.models import Bug, GatewayToken, Repository, WorkflowRun
+from app.models import Bug, GatewayToken, WorkflowRun
 from app.sandbox.runner import ExecResult
 
 

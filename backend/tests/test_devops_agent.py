@@ -197,8 +197,9 @@ async def test_investigation_runs_to_completion_streaming_records(agent):
     assert agent.calls[0] == ("investigate", {"title": "5xx on login since deploy abc1234"})
 
 
-async def test_failed_investigation_keeps_partial_findings(monkeypatch):
-    fake = FakeDevOpsAgent(fail=True)
+@pytest.mark.parametrize("end", ["FAILED", "CANCELED", "LINKED"])
+async def test_unsuccessful_investigation_ends_and_keeps_partial_findings(monkeypatch, end):
+    fake = FakeDevOpsAgent(end_status=end)
     url = fake.start()
     monkeypatch.setattr(get_settings(), "devops_agent_url", url)
     monkeypatch.setattr(get_settings(), "devops_agent_token", TOKEN)
@@ -206,8 +207,19 @@ async def test_failed_investigation_keeps_partial_findings(monkeypatch):
         res = await inv.run_investigation(da.DevOpsAgentClient(get_settings()), "x", poll_seconds=0, sleep=_no_sleep)
     finally:
         fake.stop()
-    assert res.status == "FAILED" and res.records and "partial" in res.error and res.recommendations == []
-    assert "list_recommendations" not in [c[0] for c in fake.calls]
+    assert res.status == end and res.records and "partial" in res.error and res.recommendations == []
+    assert "list_recommendations" not in [c[0] for c in fake.calls] and fake.status_calls == 2  # stopped, no waiting
+
+
+def test_investigation_request_and_recommendation_brief():
+    text = inv.investigation_request(title="Production alarm: api-5xx", repository="realify/api", branch="main",
+                                     severity="high", started_at="2026-11-05T10:00:00Z", description="5xx > 5%",
+                                     evidence="Traceback ...", alarm={"alarm": "api-5xx", "region": "ap-south-1", "account": "1"})
+    for part in ("realify/api", "2026-11-05T10:00:00Z", "CloudWatch alarm 'api-5xx'", "Traceback", "root cause"):
+        assert part in text
+    b = inv.recommendation_brief({"recommendationId": "r", "title": "t", "priority": "HIGH",
+                                  "content": {"summary": "s", "spec": "x" * 9000}})
+    assert b["summary"] == "s" and len(b["spec"]) == 4000 and b["priority"] == "HIGH"
 
 
 async def test_investigation_timeout_returns_partial(agent):
@@ -232,18 +244,7 @@ def test_record_normalization_accepts_common_shapes():
     assert inv.normalize_record({"recordType": "finding", "content": "x"})["type"] == "FINDING"
     assert inv.normalize_record({"type": "SUMMARY", "text": "y"})["text"] == "y"
     assert "weird" in inv.normalize_record({"weird": 1})["text"]  # unknown shape kept verbatim, never dropped
-
-
-# ---------------- Phase 5: classification rules ----------------
-
-def test_classification_rules():
-    from app.workflow.classify import classify_by_rules
-    assert classify_by_rules("aws_alarm", [])[0] == "incident"
-    assert classify_by_rules("auto_health", [])[0] == "incident"
-    assert classify_by_rules("github_issue", ["Bug", "Production"])[0] == "incident"
-    assert classify_by_rules("github_issue", ["enhancement"])[0] == "feature"
-    assert classify_by_rules("auto_semgrep", [])[0] == "bug"
-    assert classify_by_rules("github_issue", ["bug"]) is None  # ambiguous: the AI decides
+    assert inv.normalize_record({"recordType": "SUMMARY", "content": {"text": "z"}})["text"] == "z"  # API: content is a document
 
 
 # ---------------- Phase 5: classification rules ----------------

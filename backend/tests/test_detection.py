@@ -174,7 +174,7 @@ async def test_repo_settings_validation(fake, db):
 
 
 async def test_scheduler(fake, db):
-    r = await setup_repo(fake, db, settings={"scan_interval_hours": 24})
+    await setup_repo(fake, db, settings={"scan_interval_hours": 24})
     assert await jobs.enqueue_scheduled_scans(db) == 1
     assert await jobs.enqueue_scheduled_scans(db) == 0  # one already queued
     await db.execute(update(ScanRun).values(status="succeeded", created_at=datetime.now(UTC) - timedelta(hours=1)))

@@ -42,6 +42,7 @@ docker compose up -d --build          # first build takes several minutes (sandb
 docker compose ps                      # api healthy; sandbox-image "Exited (0)" is expected
 docker compose exec api python -m app.cli create-admin --email you@realify.ai --name "Your Name"
 docker compose exec api python -m app.cli github-check
+docker compose exec api python -m app.cli devops-agent-check   # if AWS DevOps Agent is configured
 ```
 
 ## 4. HTTPS (required for production)
@@ -71,6 +72,10 @@ With nginx or a cloud load balancer, forward `Host`, allow WebSocket upgrades on
 
 Open a bug and click **Investigate with AI**. Watch the run under **Runs**. When validation passes, a Reviewer approves PR creation. DebugOps opens the PR, and a human merges it in GitHub.
 
+## 7. Optional: production incidents (AWS DevOps Agent and CloudWatch)
+
+Configure the token, run the connectivity check, enable the integration, then subscribe DebugOps to your alarm SNS topic at `https://<host>/api/v1/aws/sns`. Full steps: [AWS_DEVOPS_AGENT.md](AWS_DEVOPS_AGENT.md).
+
 ## Upgrading
 
 ```bash
@@ -78,6 +83,7 @@ scripts/backup.sh
 git pull
 docker compose up -d --build     # the api applies database migrations on start
 docker compose exec api python -m app.cli github-check
+docker compose exec api python -m app.cli devops-agent-check   # if AWS DevOps Agent is configured
 ```
 
 Roll back by checking out the previous version and restoring the backup taken before the upgrade (see [OPERATIONS.md](OPERATIONS.md)).

@@ -4,7 +4,7 @@
   investigate(title) -> taskId, executionId
   every >=30s: get_task(task_id) for status; list_journal_records(execution_id, order=ASC, next_token) for NEW records
   COMPLETED: list_journal_records(order=DESC, limit=10) for the final findings; list_recommendations(task_id)
-  FAILED: journal may still hold partial findings -> keep them
+  FAILED / TIMED_OUT / CANCELED / SKIPPED / LINKED: journal may still hold partial findings -> keep them
   no completion within max time -> TIMED_OUT with partial findings
 
 Everything returned is untrusted text produced by the agent. It is stored and displayed, and handed to Claude Code
@@ -20,7 +20,9 @@ from datetime import UTC, datetime
 
 from app.integrations.devops_agent import DevOpsAgentClient, DevOpsAgentError
 
-TERMINAL = {"COMPLETED", "FAILED"}
+# Task statuses that end an investigation (AWS DevOps Agent API TaskStatus enum). PENDING_*, IN_PROGRESS and WAITING
+# are still running. LINKED: triage attached the alert to an existing investigation; SKIPPED: triage chose not to run.
+TERMINAL = {"COMPLETED", "FAILED", "TIMED_OUT", "CANCELED", "SKIPPED", "LINKED"}
 KEY_TYPES = {"FINDING", "SUMMARY", "SUGGESTION"}
 MAX_RECORDS = 500
 MAX_TEXT = 4000
@@ -30,9 +32,38 @@ def normalize_record(r: dict) -> dict:
     """Journal record -> {type, text}. Field names are not documented by AWS, so accept the common spellings."""
     rtype = str(r.get("recordType") or r.get("record_type") or r.get("type") or "RECORD").upper()
     text = r.get("content") or r.get("text") or r.get("message") or r.get("summary")
+    if isinstance(text, dict):  # API: content is a JSON document
+        text = next((text[k] for k in ("text", "summary", "markdown", "message") if isinstance(text.get(k), str)), text)
     if not isinstance(text, str):
-        text = json.dumps(r, default=str)
+        text = json.dumps(text if text is not None else r, default=str)
     return {"type": rtype, "text": text[:MAX_TEXT], "at": r.get("createdAt") or r.get("timestamp") or datetime.now(UTC).isoformat()}
+
+
+def investigation_request(*, title: str, repository: str, branch: str, severity: str, started_at: str,
+                          description: str, evidence: str, alarm: dict | None = None) -> str:
+    """The text sent to `investigate(title=...)`. AWS's skill packs all context into this one field; the console asks
+    for the same things: what is wrong, a starting point (alarm, metric or log), and when it started (UTC)."""
+    lines = [f"Production incident: {title}",
+             f"Started: {started_at} (UTC). Severity: {severity}.",
+             f"Service code: GitHub repository {repository}, deployed from branch {branch}."]
+    if alarm:
+        lines.append(f"Starting point: CloudWatch alarm {alarm.get('alarm')!r} in region {alarm.get('region')}, "
+                     f"account {alarm.get('account')}.")
+    lines += ["", "What was observed:", description.strip()[:3000] or "(no description)"]
+    if evidence.strip():
+        lines += ["", "Evidence (stack traces, logs, alarm payload):", evidence.strip()[:5000]]
+    lines += ["", "Please determine: (1) the root cause; (2) whether a recent deployment or code change caused it, naming "
+              "the commit, deployment and source files involved; (3) the affected resources; (4) mitigation steps. "
+              "A coding agent will use your findings to fix the code in the repository above."]
+    return "\n".join(lines)
+
+
+def recommendation_brief(r: dict) -> dict:
+    """Keep what a coding agent needs from a recommendation (API fields: title, content{summary, spec}, priority)."""
+    content = r.get("content") if isinstance(r.get("content"), dict) else {}
+    return {"recommendationId": r.get("recommendationId"), "title": str(r.get("title") or "")[:300],
+            "priority": r.get("priority"), "summary": str(content.get("summary") or r.get("summary") or "")[:1500],
+            "spec": str(content.get("spec") or "")[:4000]}
 
 
 @dataclass
@@ -118,6 +149,6 @@ async def run_investigation(client: DevOpsAgentClient, title: str, *,
             res.recommendations = [r for r in (recs.get("recommendations") or []) if isinstance(r, dict)][:20]
     except DevOpsAgentError as e:
         res.error = f"could not fetch final findings: {e}"
-    if res.status == "FAILED" and not res.error:
-        res.error = "the investigation failed; partial findings (if any) are kept"
+    if res.status != "COMPLETED" and not res.error:
+        res.error = f"the investigation ended {res.status}; partial findings (if any) are kept"
     return res

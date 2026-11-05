@@ -1,7 +1,5 @@
 """Repository management rules (persistent clone, fetch-before-task, isolated worktrees, never touch others' work)."""
 
-import os
-from pathlib import Path
 
 import pytest
 

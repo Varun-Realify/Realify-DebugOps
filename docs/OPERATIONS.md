@@ -64,6 +64,8 @@ scripts/restore.sh backups/<file>.dump    # DESTRUCTIVE: replaces current data; 
 | Update Semgrep rules / scanner versions | edit the ARGs in `sandbox/Dockerfile` (pin new sha256 values), then `docker compose build sandbox-image` |
 | More throughput | `docker compose up -d --scale worker=3` (each worker runs one scan or run at a time) |
 | Cancel a runaway run | Run page, then **Cancel run** (stops after the current step) |
+| Enable AWS DevOps Agent | set `DEVOPS_AGENT_TOKEN`, `docker compose up -d`, then **Integrations → Run connectivity check → Enable incident workflow** (see [AWS_DEVOPS_AGENT.md](AWS_DEVOPS_AGENT.md)) |
+| Route a new CloudWatch alarm | add its SNS topic ARN to `SNS_TOPIC_ARNS`, restart `api`, and add the alarm name pattern to the repository's **Settings → Production incidents** |
 
 ## Secret rotation / incident response
 
@@ -74,9 +76,14 @@ scripts/restore.sh backups/<file>.dump    # DESTRUCTIVE: replaces current data; 
 | GitHub App private key | generate a new key in the App settings, replace `secrets/github-app.pem`, delete the old key in GitHub | installation tokens are short-lived (1 h), so old ones expire on their own |
 | Webhook secret | update GitHub App settings and `.env` together | deliveries fail with 401 in between; redeliver them afterwards |
 | Anthropic key | create a new key, update `.env`, `docker compose up -d worker llm-gateway`, revoke the old key | sandboxes never had the key; per-run gateway tokens are revoked when a run's sandbox is released |
+| `DEVOPS_AGENT_TOKEN` (expires after 1–60 days) | create a new token in the DevOps Agent web app, update `.env`, `docker compose up -d api worker llm-gateway`, run **Integrations → Run connectivity check**, revoke the old token | rotating a token in AWS invalidates the old one at once; a failing check disables the integration until a check passes |
 | Suspected sandbox escape | stop the stack, rotate every secret above, rebuild the host | see SECURITY.md |
 
 ## Troubleshooting
+
+- **AWS investigation stage says "skipped: integration is not enabled":** run the check on **Integrations**; it must pass before **Enable** works. `401` means the token is invalid or expired; `403` or "required tools missing: investigate" means it lacks the **operate** scope.
+- **AWS investigation ends `LINKED` or `SKIPPED`:** DevOps Agent's own triage attached the alert to an existing investigation or chose not to run. The run continues from the code alone; look at the linked investigation in the DevOps Agent web app.
+- **Investigations fail to start under load:** an Agent Space allows 3 concurrent investigations by default (adjustable in Service Quotas).
 
 | Symptom | Check |
 |---|---|

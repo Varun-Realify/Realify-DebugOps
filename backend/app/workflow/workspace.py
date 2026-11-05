@@ -10,7 +10,6 @@ import shlex
 from dataclasses import dataclass, field
 
 from app.config import Settings
-from app.detection.parsers import TestCase
 from app.detection.scan import TestSuite, install_suite, run_suite_cases
 from app.sandbox.runner import SRC, ExecResult, Sandbox, SourceTree
 
@@ -183,6 +182,3 @@ class Workspace:
 # Live workspaces in this worker process. Rebuilt from the database if a run resumes in another process.
 REGISTRY: dict[int, Workspace] = {}
 
-
-def cases_to_dict(cases: list[TestCase]) -> dict[str, str]:
-    return {c.test_id: c.status for c in cases}

@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.integrations import sns
 from app.models import ActivityEvent, Bug, Job, Repository, WorkflowRun
 from tests.conftest import new_client
-from tests.fake_github import FakeGitHub, installation, repo
+from tests.fake_github import FakeGitHub, repo
 
 TOPIC = "arn:aws:sns:ap-south-1:123456789012:realify-prod-alarms"
 CERT_URL = "https://sns.ap-south-1.amazonaws.com/SimpleNotificationService-abc.pem"

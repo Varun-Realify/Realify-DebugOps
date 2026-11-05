@@ -5,7 +5,7 @@ import { api, RUN_STATUS_COLOR, SEVERITY_COLOR, SOURCE_LABEL, timeAgo, type Bug,
 
 const STATUSES = ['new', 'triaged', 'investigating', 'fix_proposed', 'pr_open', 'resolved', 'wont_fix', 'closed']
 
-export function SeverityBadge({ s }: { s: string }) {
+function SeverityBadge({ s }: { s: string }) {
   return <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium uppercase ${SEVERITY_COLOR[s] ?? ''}`}>{s}</span>
 }
 

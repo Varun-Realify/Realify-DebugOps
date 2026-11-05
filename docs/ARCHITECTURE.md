@@ -2,7 +2,11 @@
 
 Status: **Phases 0–8 implemented.**
 
+This document is the original Phase 0 plan, kept for its reasoning. **The implemented workflow, node by node, is in [WORKFLOW.md](WORKFLOW.md)**; where the two differ, WORKFLOW.md and the code win.
+
 Implementation notes and deviations from this plan:
+- **AWS DevOps Agent (added after Phase 8):** `intake` now classifies each task as incident / bug / feature, and a new `aws_investigation` node asks AWS DevOps Agent (MCP) to investigate production incidents before the code agents run. CloudWatch alarms arrive through SNS. See [AWS_DEVOPS_AGENT.md](AWS_DEVOPS_AGENT.md).
+- Node names differ slightly from §2.2 (`context`, `analysis`, `testing`, `await_approval`, `open_pr`; merge/CI tracking is done by the delivery tracker, not a graph node). Task branches are named `debugops/dbg-NNN-<title>`.
 - The AI Bug Hunter triage moved from Phase 3 to Phase 4, because it needs the agent layer.
 - **Claude Code reaches the API through an `llm-gateway` service**, not an egress proxy that injects the key (risk R3). Each run gets its own token, the gateway enforces per-run request and token budgets, and the token is revoked when the run's sandbox is released.
 - Security, Review and Bug Hunter agents call the Claude API directly from the worker, with structured outputs. They need no repository access.

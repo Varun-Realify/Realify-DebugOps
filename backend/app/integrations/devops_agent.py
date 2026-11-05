@@ -68,7 +68,7 @@ def _for_status(code: int) -> DevOpsAgentError | None:
     if code == 401:
         return DevOpsAgentAuthError("token invalid or expired (HTTP 401): create a new one in the DevOps Agent Operator web app")
     if code == 403:
-        return DevOpsAgentAuthError("token lacks scope (HTTP 403): it needs agent:read and agent:operate")
+        return DevOpsAgentAuthError("token lacks scope (HTTP 403): it needs the read and operate scopes")
     if code == 429:
         return DevOpsAgentThrottled("throttled by AWS DevOps Agent (HTTP 429)")
     if code >= 500:
@@ -89,7 +89,7 @@ def classify(exc: BaseException, http_errors: list[int] = ()) -> DevOpsAgentErro
         if code == 401:
             return DevOpsAgentAuthError("token invalid or expired (HTTP 401): create a new one in the DevOps Agent Operator web app")
         if code == 403:
-            return DevOpsAgentAuthError("token lacks scope (HTTP 403): it needs agent:read and agent:operate")
+            return DevOpsAgentAuthError("token lacks scope (HTTP 403): it needs the read and operate scopes")
         if code == 429:
             return DevOpsAgentThrottled("throttled by AWS DevOps Agent (HTTP 429)")
         return DevOpsAgentUnavailable(f"AWS DevOps Agent returned HTTP {code}")
@@ -191,5 +191,6 @@ async def check_connectivity(client: DevOpsAgentClient) -> dict:
     result["missing_tools"] = sorted(REQUIRED_TOOLS - set(tools))
     result["ok"] = not result["missing_tools"]
     if result["missing_tools"]:
-        result["error"] = f"required tools missing: {', '.join(result['missing_tools'])}"
+        result["error"] = (f"required tools missing: {', '.join(result['missing_tools'])}"
+                           + (" (AWS lists investigate only for tokens with the operate scope)" if "investigate" in result["missing_tools"] else ""))
     return result

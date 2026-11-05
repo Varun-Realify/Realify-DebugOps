@@ -295,7 +295,7 @@ function RunView({ me }: { me: User }) {
               {r.investigation.recommendations.length > 0 && (
                 <div className="rounded border border-warn p-2 text-xs">
                   <div className="font-medium text-warn">Recommendations (never executed by DebugOps; review before acting)</div>
-                  <ul className="mt-1 list-disc pl-4">{r.investigation.recommendations.map((x, i) => <li key={i}>{x.title ?? x.recommendationId}</li>)}</ul>
+                  <ul className="mt-1 list-disc pl-4">{r.investigation.recommendations.map((x, i) => <li key={i}>{x.title ?? x.recommendationId}{x.priority && <span className="text-muted"> ({x.priority.toLowerCase()})</span>}{x.content?.summary && <div className="text-muted">{x.content.summary}</div>}</li>)}</ul>
                 </div>)}
             </section>
           )}

@@ -1,6 +1,6 @@
 # Bug Detection
 
-DebugOps finds bugs in two ways. Both produce **bug records** in one shared list, which feeds the debugging workflow (Phase 4+).
+DebugOps receives bugs from GitHub issues, developer reports, automated scans, CloudWatch alarms and post-deploy health checks. All of them produce **bug records** in one shared list, which feeds the debugging workflow ([WORKFLOW.md](WORKFLOW.md)).
 
 ## A. Manual: GitHub issues
 
@@ -17,6 +17,12 @@ Developers can report a bug directly in **Bugs → Report bug**, with a descript
 - Secrets in all of it are redacted before storage.
 - Similar existing bugs are shown right away.
 - Optionally a GitHub issue is opened and an AI investigation starts immediately.
+
+## A3. Automatic: CloudWatch alarms (production incidents)
+
+A CloudWatch alarm entering `ALARM` publishes to an SNS topic that DebugOps subscribes to (`POST /api/v1/aws/sns`). The message is signature-verified, matched to a repository by its `alarm_patterns`, and recorded as a bug with source `aws_alarm` and label `incident` (one bug per alarm, account and region; a repeat firing increments its occurrence count). If the repository has `auto_investigate_alarms` on, a debugging run starts and AWS DevOps Agent investigates first. Setup: [AWS_DEVOPS_AGENT.md](AWS_DEVOPS_AGENT.md).
+
+Failed post-deploy health checks (source `auto_health`) are handled the same way: they open a critical regression bug, classified as an incident.
 
 ## B. Automatic: scans
 
@@ -83,4 +89,4 @@ To allow another domain (for example a private package registry), add it to `egr
 - The sandbox receives the head commit's files without git history, so secrets that exist only in **history** are not scanned. The persistent clone does hold full history, so history scanning can be added there.
 - Semgrep rules are fixed at sandbox image build time. Rebuild the image (`docker compose build sandbox-image`) to update them.
 - Test auto-detection covers Python and Node. Other stacks need a custom `test_command`.
-- Triage is deterministic (severity mapping and fingerprints). AI triage (the Bug Hunter agent) arrives in Phase 4.
+- Detection-time triage is deterministic (severity mapping and fingerprints). The Bug Hunter agent triages a scan finding when a debugging run starts, and stops the run on a confident false positive.

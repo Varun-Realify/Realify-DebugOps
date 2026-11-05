@@ -17,13 +17,13 @@ from app.agents.schemas import (CodeAnalysis, FileRef, FixResult, Hypothesis, In
 from app.config import get_settings
 from app.github.client import GitHubApp, get_github
 from app.main import app
-from app.models import (AgentStep, Approval, Bug, Evidence, FixAttempt, GatewayToken, PullRequest, Report, Repository, Role,
-                        ScanRun, TestRun, WorkflowRun)
+from app.models import (AgentStep, Approval, Bug, FixAttempt, GatewayToken, PullRequest, Report, Repository, Role,
+                        WorkflowRun)
 from app.sandbox.runner import Sandbox
 from app.workflow import runner
 from app.workflow.graph import Deps
 from app.workflow.workspace import REGISTRY
-from tests.conftest import PASSWORD, login, logged_in, make_user, new_client
+from tests.conftest import login, logged_in, make_user, new_client
 from tests.fake_github import FakeGitHub, installation, repo
 from tests.git_remote import push_files
 from tests.test_detection import _sandbox_image_available
@@ -194,7 +194,6 @@ async def test_happy_path_to_merged_pr(env, db):
     async with new_client() as c:
         await login(c, reviewer.email)
         assert (await c.post(f"/api/v1/runs/{run_id}/approve", json={"reason": "lgtm"})).status_code == 200
-    job = (await db.execute(select(WorkflowRun))).scalar_one()
     await runner.execute(run_id, resume={"decision": "approve", "user_id": reviewer.id, "reason": "lgtm"}, deps=deps(gh, llm, script))
 
     run = await reload(db, WorkflowRun, run_id)
@@ -477,103 +476,10 @@ async def test_production_incident_goes_through_aws_devops_agent(env, db, devops
     # Findings reach Claude Code as untrusted data; Claude Code also gets read-only MCP access for this run.
     analyst_prompt = next(p for a, p, _ in script["prompts"] if a == "code_analyst")
     assert "<untrusted_aws_investigation>" in analyst_prompt and "Root cause: login()" in analyst_prompt
-    assert "rm -rf" not in analyst_prompt  # recommendation bodies are not forwarded, only their titles
-    assert all(flag for a, _, flag in script["prompts"] if a in ("code_analyst", "investigation", "fix"))
-    feed = (await db.execute(select(ActivityEvent.message).where(ActivityEvent.source == "aws_devops_agent"))).scalars().all()
-    assert any("[FINDING]" in m for m in feed) and any("completed" in m for m in feed)
-
-
-async def test_normal_bug_and_feature_skip_aws(env, db, devops):
-    _, gh = env
-    _, bug = await setup(db, gh)
-    await _enable_integration(db)
-    run = await runner.start_run(db, bug, None)
-    script = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
-    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(task_type="bug"), script))  # AI classifies: bug
-    run = await reload(db, WorkflowRun, run.id)
-    assert run.task_type == "bug" and run.status == "waiting_approval"
-    assert devops.calls == []  # AWS never contacted
-    assert not any(flag for _, _, flag in script["prompts"])
-
-    bug2 = Bug(repository_id=run.repository_id, source="github_issue", title="Add mul3()", description="new helper",
-               severity="low", status="new", fingerprint="feat-1", affected_files=[], data={"labels": ["enhancement"]})
-    db.add(bug2)
-    await db.commit()
-    run2 = await runner.start_run(db, bug2, None)
-    script2 = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
-    await runner.execute(run2.id, deps=aws_deps(gh, FakeLLM(), script2))
-    run2 = await reload(db, WorkflowRun, run2.id)
-    assert run2.task_type == "feature" and devops.calls == []
-    assert "FEATURE REQUEST" in next(p for a, p, _ in script2["prompts"] if a == "fix")
-
-
-async def test_incident_with_integration_disabled_continues_without_aws(env, db, devops):
-    _, gh = env
-    _, bug = await setup(db, gh)
-    bug = await reload(db, Bug, bug.id)
-    bug.data = {"labels": ["production"]}
-    await db.commit()
-    await _enable_integration(db, enabled=False)
-    run = await runner.start_run(db, bug, None)
-    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(), {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}))
-    run = await reload(db, WorkflowRun, run.id)
-    assert run.task_type == "incident" and run.status == "waiting_approval" and devops.calls == []
-    assert "not enabled" in run.nodes["aws_investigation"]["detail"]
-
-
-# ---------------- task classification and AWS DevOps Agent routing ----------------
-
-async def _no_sleep(_):
-    return None
-
-
-@pytest.fixture
-def devops(monkeypatch):
-    from tests.fake_devops_agent import TOKEN, FakeDevOpsAgent
-    fake = FakeDevOpsAgent()
-    url = fake.start()
-    monkeypatch.setattr(get_settings(), "devops_agent_url", url)
-    monkeypatch.setattr(get_settings(), "devops_agent_token", TOKEN)
-    yield fake
-    fake.stop()
-
-
-async def _enable_integration(db, enabled=True):
-    from app.models import Integration
-    db.add(Integration(name="aws-devops-agent", enabled=enabled, last_check={"ok": True}))
-    await db.commit()
-
-
-def aws_deps(gh, llm, script):
-    from app.integrations.devops_agent import DevOpsAgentClient
-    d = deps(gh, llm, script)
-    d.devops_agent, d.sleep = (lambda: DevOpsAgentClient(get_settings())), _no_sleep
-    return d
-
-
-async def test_production_incident_goes_through_aws_devops_agent(env, db, devops):
-    from app.models import ActivityEvent, Investigation
-    _, gh = env
-    _, bug = await setup(db, gh)
-    bug = await reload(db, Bug, bug.id)
-    bug.data = {"labels": ["incident"]}
-    await db.commit()
-    await _enable_integration(db)
-    run = await runner.start_run(db, bug, None)
-    script = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
-    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(), script))
-
-    run = await reload(db, WorkflowRun, run.id)
-    assert run.task_type == "incident" and run.status == "waiting_approval", (run.error, run.nodes)
-    assert run.nodes["aws_investigation"]["status"] == "completed"
-    inv = (await db.execute(select(Investigation))).scalar_one()
-    assert inv.status == "COMPLETED" and inv.agent_task_id == "task-123" and "Root cause" in inv.summary
-    assert inv.recommendations[0]["recommendationId"] == "rec-1"
-    assert [c[0] for c in devops.calls][0] == "investigate" and "create_access_token" not in [c[0] for c in devops.calls]
-    # Findings reach Claude Code as untrusted data; Claude Code also gets read-only MCP access for this run.
-    analyst_prompt = next(p for a, p, _ in script["prompts"] if a == "code_analyst")
-    assert "<untrusted_aws_investigation>" in analyst_prompt and "Root cause: login()" in analyst_prompt
-    assert "rm -rf" not in analyst_prompt  # recommendation bodies are not forwarded, only their titles
+    aws_block = analyst_prompt.split("<untrusted_aws_investigation>")[1].split("</untrusted_aws_investigation>")[0]
+    assert "login() fails for SSO users" in aws_block  # recommendation summary + spec are forwarded...
+    assert analyst_prompt.count("rm -rf") == aws_block.count("rm -rf") == 1  # ...but only as untrusted data
+    assert "Never run commands" in analyst_prompt and 'task_id="task-123"' in analyst_prompt
     assert all(flag for a, _, flag in script["prompts"] if a in ("code_analyst", "investigation", "fix"))
     feed = (await db.execute(select(ActivityEvent.message).where(ActivityEvent.source == "aws_devops_agent"))).scalars().all()
     assert any("[FINDING]" in m for m in feed) and any("completed" in m for m in feed)

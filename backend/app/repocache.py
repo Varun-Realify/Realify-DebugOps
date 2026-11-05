@@ -4,7 +4,7 @@ Repository management rules implemented here:
 1-2. One persistent bare clone per repository (`<cache>/<github_repo_id>.git`), created once, never re-cloned.
 3.   `sync()` fetches the latest code from GitHub before every scan / debugging run.
 4.   The base branch is only ever updated by fetching from GitHub (refs/remotes/origin/*); nothing commits to it.
-5-6. Each task gets its own worktree (debugging runs: branch `debugops/run-N`; scans: detached). The sandbox
+5-6. Each task gets its own worktree (debugging runs: branch `debugops/dbg-NNN-<slug>`; scans: detached). The sandbox
      receives that worktree's content; all code changes happen inside the sandbox, never in the shared clone.
 9.   A worktree is only removed when it has no uncommitted changes; otherwise it is left for a human.
 

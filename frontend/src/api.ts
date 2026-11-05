@@ -1,5 +1,5 @@
 export type Role = 'admin' | 'developer' | 'reviewer'
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 
 export interface User {
   id: number
@@ -11,7 +11,7 @@ export interface User {
   created_at: string
 }
 
-export interface Activity {
+interface Activity {
   id: number
   ts: string
   level: string
@@ -20,7 +20,7 @@ export interface Activity {
   message: string
 }
 
-export interface WorkerInfo {
+interface WorkerInfo {
   id: string
   started_at: string
   last_seen_at: string
@@ -260,9 +260,9 @@ export interface RunSummary {
   error: string | null
 }
 
-export interface Issue { severity: string; file: string; line: number | null; description: string }
+interface Issue { severity: string; file: string; line: number | null; description: string }
 
-export interface Delivery {
+interface Delivery {
   review_state: string | null
   reviews: { user: string; state: string; at: string }[]
   merge_commit_sha: string | null
@@ -273,9 +273,9 @@ export interface Delivery {
     recent?: { at: string; ok: boolean; status: number | null; ms: number }[] }
 }
 
-export interface AwsInvestigation {
+interface AwsInvestigation {
   status: string; agent_task_id: string | null; agent_execution_id: string | null; summary: string
-  recommendations: { recommendationId?: string; title?: string; content?: string }[]; records: number
+  recommendations: { recommendationId?: string; title?: string; priority?: string; content?: { summary?: string; spec?: string } }[]; records: number
   key_records: { type: string; text: string; at: string }[]; error: string | null; started_at: string | null; finished_at: string | null
 }
 

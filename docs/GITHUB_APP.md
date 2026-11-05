@@ -4,9 +4,11 @@ DebugOps reaches private repositories through a **GitHub App** that belongs to R
 
 Time needed: about 10 minutes. You need to be an owner of the GitHub organization.
 
+**Fastest route:** `scripts/create_github_app.py` creates the App from a manifest with the permissions below pre-filled and writes the credentials into `.env` and `secrets/github-app.pem` (see the README, *Try it*, Step 1). The manual steps below do the same by hand.
+
 ## 1. Decide the public URL
 
-GitHub must be able to reach `https://<your-debugops-host>/api/v1/github/webhook`.
+Skip this if you use `--no-webhook` (issues are then pulled with **Import issues**). Otherwise GitHub must be able to reach `https://<your-debugops-host>/api/v1/github/webhook`.
 
 - **Production:** the HTTPS hostname of your DebugOps server, for example `https://debugops.realify.ai`.
 - **Local testing:** use a tunnel to `http://127.0.0.1:8088`, such as `cloudflared tunnel --url http://127.0.0.1:8088` or `npx smee-client`. Never expose a dev instance permanently.
@@ -26,26 +28,20 @@ GitHub → your organization → **Settings → Developer settings → GitHub Ap
 | SSL verification | Enabled |
 | Where can this app be installed? | **Only on this account** |
 
-### Repository permissions (Phase 2: read-only)
+### Repository permissions
+
+These are exactly what `scripts/create_github_app.py` requests:
 
 | Permission | Access | Used for |
 |---|---|---|
 | Metadata | Read-only | mandatory; repository info |
-| Contents | Read-only | read code, clone (later phases) |
-| Issues | Read-only | ingest bug reports (Phase 3) |
-| Pull requests | Read-only | track fix PRs (Phase 6) |
+| Contents | Read and write | fetch code into the persistent clone; create the `debugops/dbg-NNN-<title>` branch and its commit (never pushes to an existing branch) |
+| Issues | Read and write | import bug reports; optionally open issues for detected bugs; comment on the originating issue |
+| Pull requests | Read and write | open the fix PR; track its reviews and merge |
 | Checks | Read-only | read CI results on the PR and on the merge commit |
 | Deployments | Read-only | observe deployments made by your CD after merge (DebugOps never deploys) |
 
-Leave every other permission at **No access**, including Organization and Account permissions.
-
-**Write access, for when you are ready for DebugOps to propose fixes:**
-
-| Permission | Access | Used for |
-|---|---|---|
-| Contents | Read and write | create the `debugops/run-N` branch and its commit (never pushes to existing branches) |
-| Pull requests | Read and write | open the fix PR |
-| Issues | Read and write | open issues for detected bugs (optional), comment on the originating issue |
+Leave every other permission at **No access**, including Organization and Account permissions. For a read-only trial (scans and issue import, no PRs), set Contents, Issues and Pull requests to Read-only; DebugOps reports the missing write access on **Test access** and will not open PRs.
 
 **Never grant Administration.** DebugOps has no merge capability. Recommended: a branch ruleset on each repository that blocks the App from pushing to anything except `debugops/*`. GitHub then asks an org owner to approve the change, and DebugOps records the new permissions automatically.
 
@@ -71,7 +67,7 @@ mv ~/Downloads/realify-debugops.*.private-key.pem ./secrets/github-app.pem
 chmod 600 ./secrets/github-app.pem
 ```
 
-`./secrets` is git-ignored and mounted **read-only** into the `api` and `worker` containers. The key never reaches the browser, the frontend bundle, logs, or (in later phases) the AI agent sandboxes.
+`./secrets` is git-ignored and mounted **read-only** into the `api` and `worker` containers. The key never reaches the browser, the frontend bundle, logs, or the AI agent sandboxes.
 
 ## 4. Configure DebugOps
 
