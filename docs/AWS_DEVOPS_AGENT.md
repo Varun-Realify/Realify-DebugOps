@@ -1,5 +1,14 @@
 # AWS DevOps Agent Integration (MCP)
 
+**Two workflows, one pipeline: investigate → fix → test → review → raise PR.**
+
+1. **Manual (GitHub issue):** a developer opens an issue. DebugOps classifies it. **Production incidents** go to AWS DevOps Agent first; ordinary bugs and feature requests go straight to Claude Code.
+2. **Automatic (CloudWatch):** a CloudWatch alarm notifies an **SNS** topic, which calls DebugOps. DebugOps opens an incident and AWS DevOps Agent investigates.
+
+In both workflows, the findings are handed to **Claude Code** in an isolated sandbox. Claude Code fixes the code, DebugOps runs the tests and the review, and a PR is raised for a human to review and merge.
+
+DebugOps is the coordinator: it asks AWS DevOps Agent to investigate, and Claude Code does the coding. AWS's official integration has Claude Code (the MCP client) calling DevOps Agent (the MCP server). Nothing in AWS's official material shows DevOps Agent calling an external coding tool, so DebugOps does not depend on that.
+
 **Goal:** production incidents are investigated by **AWS DevOps Agent** (CloudWatch logs and metrics, X-Ray, deployment history). **Claude Code** then uses those findings to locate and fix the code-level root cause in an isolated worktree. The fix is validated by tests and proposed as a PR. Ordinary bugs and feature requests skip AWS entirely.
 
 ```
@@ -14,15 +23,16 @@ GitHub issue ─▶ classify ─┬─ production incident ─▶ AWS DevOps Age
 |---|---|---|
 | 1 | Inspect the repository and design the integration | ✅ done (this document) |
 | 2 | MCP connectivity: client, verification, Claude Code access via the gateway proxy | ✅ built and tested against a mock DevOps Agent; **not yet verified against the real AWS endpoint** (needs a token) |
-| 3 | Investigation service (start, poll, journal, recommendations, timeouts) | planned |
-| 4 | Feed findings to Claude Code (investigation and fix stages) | planned |
-| 5 | Classify incoming tasks and route them | planned |
+| 3 | Investigation service (start, poll, journal, recommendations, timeouts) | ✅ built and tested (mock) |
+| 4 | Feed findings to Claude Code (investigation and fix stages) | ✅ built and tested (mock + real sandbox) |
+| 5 | Classify incoming tasks and route them | ✅ built and tested |
+| 5b | CloudWatch alarms via SNS (automatic workflow) | ✅ built and tested (signed test messages) |
 | 6 | Isolated worktree + Docker execution | ✅ already exists (persistent clone, worktree per task, sandbox) |
 | 7 | GitHub issues and PRs | ✅ already exists |
-| 8 | Live dashboard: investigation status and findings | planned (real-time pipeline already exists) |
+| 8 | Live dashboard: investigation status and findings | ✅ task type, AWS stage, live journal records, findings panel, Integrations page |
 | 9 | End-to-end test with a non-production sample incident | planned (needs an AWS account / AgentSpace) |
 
-**Not connected yet.** DebugOps only reports the integration as connected after a live check succeeds (`devops-agent-check`, below).
+**Not connected to real AWS yet.** DebugOps only reports the integration as connected after a live check succeeds (`devops-agent-check`, below).
 
 ## Phase 1: what already exists, and the plan
 
@@ -70,6 +80,48 @@ Source: [`aws/agent-toolkit-for-aws`](https://github.com/aws/agent-toolkit-for-a
 | Claude Code access | `llm-gateway` at `/mcp/aws-devops-agent`, and `devops_agent_mcp_config()` | Claude Code in the sandbox gets an MCP config pointing at the gateway, authenticated with its **per-run token**. The gateway swaps in the real token and allows **read-only tools only**: `get_task`, `list_tasks`, `list_journal_records`, `list_executions`, `list_recommendations`, `get_recommendation`. Everything else (starting investigations, mitigations, access tokens, agent spaces) is hidden from `tools/list` and refused. `--strict-mcp-config` stops a repository from adding its own MCP servers |
 
 **Why a proxy instead of giving Claude Code the token:** the sandbox runs untrusted repository code. A DevOps Agent token there could be read and used to query production. With the proxy, the token stays in `llm-gateway` and the worker, sandbox access expires with the run, and the sandbox can only read the investigation DebugOps started. The worker remains the single component that *starts* investigations, which makes them deterministic, audited, time-limited and persisted.
+
+## How a production incident flows
+
+1. **Classification:**
+   - A task is an **incident** if its source is a CloudWatch alarm or a failed post-deploy health check, or if it carries a label such as `incident`, `production`, `outage`, `sev1` or `p0`.
+   - A `feature` or `enhancement` label makes it a feature.
+   - Scan findings are bugs.
+   - Otherwise the AI decides, preferring "bug" when unsure.
+   - The result is shown on the task and in the audit record.
+2. **`aws_investigation` stage** (incidents only, and only when the integration is enabled):
+   - DebugOps calls `investigate`, packing the incident with local context (repository, description, stack traces and logs), as AWS's skill recommends.
+   - It polls `get_task` and new `list_journal_records` pages at least 30 seconds apart. Each record appears in the **live feed**.
+   - On `COMPLETED`, it reads the final records and `list_recommendations`.
+   - On `FAILED` or a timeout, it keeps the partial findings.
+   - Everything is stored in the `investigations` table, with secrets redacted.
+3. **Claude Code:**
+   - The Code Analyst, Investigation and Fix agents receive the summary and findings inside `<untrusted_aws_investigation>`. Recommendation *bodies* are not forwarded, only their titles.
+   - They also get **read-only** MCP access through the gateway, so they can read more of the investigation's journal.
+   - They must still cite real code (`file:line`), which DebugOps checks.
+4. **Fix, tests, security, review, PR:** unchanged. DebugOps' own fail-before/pass-after validation decides whether a fix is proven, and a human merges.
+
+If the investigation fails, the run still continues: Claude Code works from the code and whatever findings exist. The status and reason are recorded.
+
+## Automatic workflow: CloudWatch → SNS → DebugOps
+
+1. Create an SNS topic, for example `realify-prod-alarms`, and add it as the **alarm action** on the CloudWatch alarms that should trigger investigations.
+2. Subscribe DebugOps to it: protocol **HTTPS**, endpoint `https://<your-debugops-host>/api/v1/aws/sns`. DebugOps confirms the subscription automatically.
+3. Allow the topic in `.env`: `SNS_TOPIC_ARNS=["arn:aws:sns:ap-south-1:<account>:realify-prod-alarms"]`, then restart.
+4. In each repository's **Settings**, list the alarm names that belong to it, for example `realify-api-*`, and keep "Start the incident workflow automatically" on.
+
+Security and behaviour:
+- **Every SNS message is signature-verified:**
+  - the certificate must come from `https://sns.<region>.amazonaws.com`;
+  - the RSA signature is checked over AWS's canonical string;
+  - messages older than an hour are rejected;
+  - each message ID is processed only once;
+  - only allowlisted topics are accepted;
+  - the subscription confirm link is only followed if it is an SNS URL.
+- Only transitions to **ALARM** create incidents. OK and INSUFFICIENT_DATA are ignored.
+- **Deduplication:** the same alarm firing again updates one bug (its occurrence count) instead of starting another run. An alarm firing again after its bug was resolved reopens it and starts a new run.
+- An alarm that matches no repository is recorded as a warning on the dashboard and otherwise ignored.
+- DebugOps must be reachable from AWS over HTTPS (a server deployment, see INSTALL.md).
 
 ## Setup (development, bearer token)
 

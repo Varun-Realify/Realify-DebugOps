@@ -166,3 +166,93 @@ async def test_integration_check_and_enable_gating(agent, monkeypatch):
         monkeypatch.setattr(get_settings(), "devops_agent_token", "revoked-token")
         res = (await admin.post("/api/v1/integrations/aws-devops-agent/check")).json()
         assert res["connected"] is False and res["enabled"] is False  # a failing check switches the workflow off
+
+
+# ---------------- Phase 3: investigation service ----------------
+
+from app.integrations import investigation as inv  # noqa: E402
+
+
+async def _no_sleep(_):
+    return None
+
+
+async def test_investigation_runs_to_completion_streaming_records(agent):
+    seen, statuses = [], []
+
+    async def on_record(r):
+        seen.append(r)
+
+    async def on_status(st, task_id, exec_id):
+        statuses.append(st)
+    res = await inv.run_investigation(da.DevOpsAgentClient(get_settings()), "5xx on login since deploy abc1234",
+                                      on_record=on_record, on_status=on_status, poll_seconds=0, sleep=_no_sleep)
+    assert res.status == "COMPLETED" and res.task_id == "task-123" and res.execution_id == "exec-456"
+    assert statuses == ["CREATED", "IN_PROGRESS", "COMPLETED"]
+    assert [r["type"] for r in seen][:2] == ["SEARCHING", "FINDING"] and any(r["type"] == "SUMMARY" for r in seen)
+    pages = [kw for name, kw in agent.calls if name == "list_journal_records" and kw["order"] == "ASC"]
+    assert pages[0]["next_token"] is None and pages[1]["next_token"] == "page-2"  # only new records each poll
+    assert "Root cause" in res.summary and "SEARCHING" not in res.summary
+    assert res.recommendations[0]["recommendationId"] == "rec-1"
+    assert agent.calls[0] == ("investigate", {"title": "5xx on login since deploy abc1234"})
+
+
+async def test_failed_investigation_keeps_partial_findings(monkeypatch):
+    fake = FakeDevOpsAgent(fail=True)
+    url = fake.start()
+    monkeypatch.setattr(get_settings(), "devops_agent_url", url)
+    monkeypatch.setattr(get_settings(), "devops_agent_token", TOKEN)
+    try:
+        res = await inv.run_investigation(da.DevOpsAgentClient(get_settings()), "x", poll_seconds=0, sleep=_no_sleep)
+    finally:
+        fake.stop()
+    assert res.status == "FAILED" and res.records and "partial" in res.error and res.recommendations == []
+    assert "list_recommendations" not in [c[0] for c in fake.calls]
+
+
+async def test_investigation_timeout_returns_partial(agent):
+    agent.polls_until_done = 10_000  # never completes
+    t = [0.0]
+
+    def clock():
+        t[0] += 60  # each poll "takes" a minute
+        return t[0]
+    res = await inv.run_investigation(da.DevOpsAgentClient(get_settings()), "x", poll_seconds=0, max_minutes=3,
+                                      sleep=_no_sleep, clock=clock)
+    assert res.status == "TIMED_OUT" and "partial" in res.error and res.records
+
+
+async def test_investigation_start_failure_is_reported(monkeypatch, agent):
+    monkeypatch.setattr(get_settings(), "devops_agent_token", "bad")
+    res = await inv.run_investigation(da.DevOpsAgentClient(get_settings()), "x", poll_seconds=0, sleep=_no_sleep)
+    assert res.status == "ERROR" and "401" in res.error
+
+
+def test_record_normalization_accepts_common_shapes():
+    assert inv.normalize_record({"recordType": "finding", "content": "x"})["type"] == "FINDING"
+    assert inv.normalize_record({"type": "SUMMARY", "text": "y"})["text"] == "y"
+    assert "weird" in inv.normalize_record({"weird": 1})["text"]  # unknown shape kept verbatim, never dropped
+
+
+# ---------------- Phase 5: classification rules ----------------
+
+def test_classification_rules():
+    from app.workflow.classify import classify_by_rules
+    assert classify_by_rules("aws_alarm", [])[0] == "incident"
+    assert classify_by_rules("auto_health", [])[0] == "incident"
+    assert classify_by_rules("github_issue", ["Bug", "Production"])[0] == "incident"
+    assert classify_by_rules("github_issue", ["enhancement"])[0] == "feature"
+    assert classify_by_rules("auto_semgrep", [])[0] == "bug"
+    assert classify_by_rules("github_issue", ["bug"]) is None  # ambiguous: the AI decides
+
+
+# ---------------- Phase 5: classification rules ----------------
+
+def test_classification_rules():
+    from app.workflow.classify import classify_by_rules
+    assert classify_by_rules("aws_alarm", [])[0] == "incident"
+    assert classify_by_rules("auto_health", [])[0] == "incident"
+    assert classify_by_rules("github_issue", ["Bug", "Production"])[0] == "incident"
+    assert classify_by_rules("github_issue", ["enhancement"])[0] == "feature"
+    assert classify_by_rules("auto_semgrep", [])[0] == "bug"
+    assert classify_by_rules("github_issue", ["bug"]) is None  # ambiguous: the AI decides

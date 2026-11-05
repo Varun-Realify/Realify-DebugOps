@@ -11,6 +11,7 @@ import Bugs from './pages/Bugs'
 import ReportBug from './pages/ReportBug'
 import Errors from './pages/Errors'
 import PullRequests from './pages/PullRequests'
+import Integrations from './pages/Integrations'
 import Scans from './pages/Scans'
 import { lazy, Suspense } from 'react'
 const Runs = lazy(() => import('./pages/Runs'))  // React Flow is heavy: load only on the Runs pages
@@ -37,6 +38,7 @@ const NAV: { to: string; label: string; roles?: Role[] }[] = [
   { to: '/users', label: 'Users', roles: ['admin'] },
   { to: '/audit', label: 'Audit log', roles: ['admin'] },
   { to: '/errors', label: 'System errors', roles: ['admin'] },
+  { to: '/integrations', label: 'Integrations', roles: ['admin'] },
   { to: '/account', label: 'Account' },
 ]
 
@@ -99,6 +101,7 @@ export default function App() {
           {me.role === 'admin' && <Route path="/users" element={<Users me={me} />} />}
           {me.role === 'admin' && <Route path="/audit" element={<AuditLog />} />}
           {me.role === 'admin' && <Route path="/errors" element={<Errors />} />}
+          {me.role === 'admin' && <Route path="/integrations" element={<Integrations />} />}
           <Route path="/account" element={<Account onSignOut={() => logout.mutate()} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

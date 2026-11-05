@@ -7,7 +7,7 @@ from app.config import get_settings
 from app.main import app
 from tests.conftest import new_client
 
-PUBLIC = {("POST", "/api/v1/auth/login"), ("POST", "/api/v1/github/webhook"),
+PUBLIC = {("POST", "/api/v1/auth/login"), ("POST", "/api/v1/github/webhook"), ("POST", "/api/v1/aws/sns"),
           ("GET", "/api/health/live"), ("GET", "/api/health/ready")}
 
 

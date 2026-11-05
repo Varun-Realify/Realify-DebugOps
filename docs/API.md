@@ -41,6 +41,12 @@ Base path `/api/v1`. Generated from the code by `scripts/gen_api_docs.py` — do
 | `POST` | `/api/v1/auth/logout` | Logout |
 | `GET` | `/api/v1/auth/me` | Me |
 
+## alerts
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/aws/sns` | Sns Endpoint |
+
 ## detection
 
 | Method | Path | Description |
@@ -62,7 +68,7 @@ Base path `/api/v1`. Generated from the code by `scripts/gen_api_docs.py` — do
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/bugs/{bug_id}/investigate` | Investigate |
-| `GET` | `/api/v1/pull-requests` | List Prs |
+| `GET` | `/api/v1/pull-requests` | List Prs — Proposed fixes: DebugOps PRs (and runs waiting for the optional pre-PR approval) with their review state. |
 | `POST` | `/api/v1/pull-requests/{pr_id}/refresh` | Refresh Pr |
 | `GET` | `/api/v1/runs` | List Runs |
 | `GET` | `/api/v1/runs/export.csv` | Export Runs — Audit trail of debugging runs as CSV (one row per task). |
@@ -86,3 +92,11 @@ Base path `/api/v1`. Generated from the code by `scripts/gen_api_docs.py` — do
 | `PATCH` | `/api/v1/repositories/{repo_id}` | Update Repository |
 | `GET` | `/api/v1/repositories/{repo_id}/contents` | Repository Contents |
 | `POST` | `/api/v1/repositories/{repo_id}/test-access` | Test Access — Mint a token scoped to only this repository and exercise each read permission. |
+
+## integrations
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/integrations/aws-devops-agent` | Devops Agent Status |
+| `PATCH` | `/api/v1/integrations/aws-devops-agent` | Devops Agent Enable |
+| `POST` | `/api/v1/integrations/aws-devops-agent/check` | Devops Agent Check — Live connectivity test (MCP initialize + tools/list) against the configured endpoint. Never returns the token. |

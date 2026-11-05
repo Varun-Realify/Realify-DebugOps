@@ -3,21 +3,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Route, Routes, useParams } from 'react-router-dom'
 import { Background, Controls, MarkerType, Position, ReactFlow, type Edge, type Node } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { api, duration, RUN_STATUS_COLOR, timeAgo, type RunDetail, type RunSummary, type User } from '../api'
+import { api, duration, RUN_STATUS_COLOR, TASK_TYPE, timeAgo, type RunDetail, type RunSummary, type User } from '../api'
 import { useEventStream, type LiveEvent } from '../realtime/useEventStream'
 
 const LABEL: Record<string, string> = {
-  intake: 'Intake · Bug Hunter', context: 'Context collection', analysis: 'Code Analyst', investigation: 'Investigation',
+  intake: 'Intake · classification', aws_investigation: 'AWS DevOps Agent', context: 'Context collection', analysis: 'Code Analyst', investigation: 'Investigation',
   root_cause: 'Root cause gate', fix: 'Fix agent', testing: 'Testing agent', validation: 'Validation (platform)',
   security: 'Security agent', review: 'Review agent', retry_gate: 'Retry gate', report: 'Report',
   await_approval: 'Human approval', open_pr: 'Pull request',
 }
 const POS: Record<string, [number, number]> = {
-  intake: [0, 0], context: [1, 0], analysis: [2, 0], investigation: [3, 0], root_cause: [4, 0], fix: [5, 0], testing: [6, 0],
+  intake: [0, 0], aws_investigation: [0, 1], context: [1, 0], analysis: [2, 0], investigation: [3, 0], root_cause: [4, 0], fix: [5, 0], testing: [6, 0],
   validation: [6, 1], security: [5, 1], review: [4, 1], retry_gate: [5, 2], report: [3, 1], await_approval: [2, 1], open_pr: [1, 1],
 }
 const EDGES: [string, string, boolean?][] = [
-  ['intake', 'context'], ['context', 'analysis'], ['analysis', 'investigation'], ['investigation', 'root_cause'], ['root_cause', 'fix'],
+  ['intake', 'aws_investigation'], ['aws_investigation', 'context'], ['context', 'analysis'], ['analysis', 'investigation'], ['investigation', 'root_cause'], ['root_cause', 'fix'],
   ['fix', 'testing'], ['testing', 'validation'], ['validation', 'security'], ['security', 'review'], ['review', 'report'],
   ['report', 'await_approval'], ['await_approval', 'open_pr'],
   ['validation', 'retry_gate', true], ['security', 'retry_gate', true], ['review', 'retry_gate', true], ['fix', 'retry_gate', true],
@@ -60,6 +60,7 @@ function RunList() {
             {q.data?.map((r) => (
               <tr key={r.id} className="align-top">
                 <td className="td"><Link to={String(r.id)} className="font-medium hover:text-accent"><span className="font-mono text-xs text-muted">{r.task_id}</span> {r.task_title}</Link>
+                  {r.task_type && <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[11px] ${TASK_TYPE[r.task_type]?.cls ?? ''}`}>{TASK_TYPE[r.task_type]?.label}</span>}
                   <div className="text-xs text-muted">{timeAgo(r.created_at)}</div></td>
                 <td className="td text-xs"><div>{r.repository}</div><div className="font-mono text-muted">{r.branch_name}</div>
                   {r.base_sha && <div className="font-mono text-muted">base {r.base_sha.slice(0, 10)}</div>}</td>
@@ -160,17 +161,17 @@ function Diff({ runId, attemptId }: { runId: number; attemptId: number }) {
   )
 }
 
-const ORDER = ['intake', 'context', 'analysis', 'investigation', 'root_cause', 'fix', 'testing', 'validation', 'security', 'review', 'report', 'await_approval', 'open_pr']
+const ORDER = ['intake', 'aws_investigation', 'context', 'analysis', 'investigation', 'root_cause', 'fix', 'testing', 'validation', 'security', 'review', 'report', 'await_approval', 'open_pr']
 const AGENT_COLOR: Record<string, string> = {
   bug_hunter: '#f59e0b', code_analyst: '#38bdf8', investigation: '#a78bfa', fix: '#34d399', testing: '#f472b6',
-  security: '#fb7185', review: '#facc15', platform: '#94a3b8', workflow: '#94a3b8', github: '#cbd5e1', delivery: '#22d3ee',
+  security: '#fb7185', review: '#facc15', aws_devops_agent: '#ff9900', alerts: '#ff9900', platform: '#94a3b8', workflow: '#94a3b8', github: '#cbd5e1', delivery: '#22d3ee',
 }
 const AGENT_NAME: Record<string, string> = {
   bug_hunter: 'Bug Hunter', code_analyst: 'Code Analyst', investigation: 'Investigator', fix: 'Fixer', testing: 'Tester',
-  security: 'Security', review: 'Reviewer', platform: 'DebugOps', workflow: 'DebugOps', github: 'GitHub', delivery: 'Delivery',
+  security: 'Security', review: 'Reviewer', aws_devops_agent: 'AWS Agent', alerts: 'CloudWatch', platform: 'DebugOps', workflow: 'DebugOps', github: 'GitHub', delivery: 'Delivery',
 }
 const KIND_ICON: Record<string, string> = {
-  file_read: '📖', edit: '✏️', command: '❯', search: '🔎', thought: '💭', test: '🧪', error: '✕', action: '▸', info: '▸',
+  finding: '🎯', file_read: '📖', edit: '✏️', command: '❯', search: '🔎', thought: '💭', test: '🧪', error: '✕', action: '▸', info: '▸',
 }
 const ACTIVE = ['queued', 'running']
 
@@ -246,6 +247,7 @@ function RunView({ me }: { me: User }) {
       <header className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded bg-bg px-2 py-0.5 font-mono text-xs text-muted">{r.task_id}</span>
+          {r.task_type && <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${TASK_TYPE[r.task_type]?.cls ?? ''}`}>{TASK_TYPE[r.task_type]?.label ?? r.task_type}</span>}
           <span className={`rounded px-2 py-0.5 text-xs font-medium ${RUN_STATUS_COLOR[r.status] ?? ''} border border-current`}>{r.status.replace('_', ' ')}</span>
           <span className={`text-xs ${connected ? 'text-ok' : 'text-warn'}`}>{connected ? '● live' : 'reconnecting…'}</span>
           {canCancel && <button className="btn-ghost ml-auto" onClick={() => cancel.mutate()}>Cancel</button>}
@@ -282,6 +284,21 @@ function RunView({ me }: { me: User }) {
         <LiveFeed events={events.filter((e) => e.kind === 'event')} running={running} />
 
         <aside className="space-y-4">
+          {r.investigation && (
+            <section className="card space-y-2 p-4 text-sm" aria-labelledby="aws-inv">
+              <h2 id="aws-inv" className="label">AWS DevOps Agent investigation</h2>
+              <p><b className={r.investigation.status === 'COMPLETED' ? 'text-ok' : ['FAILED', 'ERROR', 'TIMED_OUT'].includes(r.investigation.status) ? 'text-bad' : 'text-accent'}>
+                {r.investigation.status.toLowerCase().replace('_', ' ')}</b> · {r.investigation.records} journal record(s)</p>
+              {r.investigation.agent_task_id && <p className="break-all font-mono text-xs text-muted">task {r.investigation.agent_task_id}</p>}
+              {r.investigation.error && <p className="text-xs text-warn">{r.investigation.error}</p>}
+              {r.investigation.key_records.slice(-4).map((k, i) => <p key={i} className="text-xs"><b>{k.type}</b> {k.text.slice(0, 300)}</p>)}
+              {r.investigation.recommendations.length > 0 && (
+                <div className="rounded border border-warn p-2 text-xs">
+                  <div className="font-medium text-warn">Recommendations (never executed by DebugOps; review before acting)</div>
+                  <ul className="mt-1 list-disc pl-4">{r.investigation.recommendations.map((x, i) => <li key={i}>{x.title ?? x.recommendationId}</li>)}</ul>
+                </div>)}
+            </section>
+          )}
           {r.status === 'waiting_approval' && (
             <div className="card space-y-2 border-warn p-4 text-sm">
               <div className="font-medium">Approve opening the PR?</div>

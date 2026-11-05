@@ -32,7 +32,7 @@ class DecisionIn(BaseModel):
 
 def _run_summary(r: WorkflowRun, bug_title: str, repo: str) -> dict:
     """The run's audit record: everything needed to answer 'what happened on this task' from PostgreSQL."""
-    return {"id": r.id, "task_id": task_id(r.id), "task_title": r.task_title or bug_title,
+    return {"id": r.id, "task_id": task_id(r.id), "task_type": r.task_type, "task_title": r.task_title or bug_title,
             "task_description": r.task_description, "base_sha": r.base_sha, "branch_name": r.branch_name,
             "files_changed": r.files_changed, "test_summary": r.test_summary, "execution_seconds": r.execution_seconds,
             "pr_url": r.pr_url, "bug_id": r.bug_id, "bug_title": bug_title, "repository_id": r.repository_id,
@@ -124,7 +124,14 @@ async def get_run(run_id: int, _: auth.CurrentPrincipal, db: Db):
     approvals = (await db.execute(select(Approval).where(Approval.run_id == run.id).order_by(Approval.id))).scalars().all()
     pr = (await db.execute(select(PullRequest).where(PullRequest.run_id == run.id))).scalar_one_or_none()
     report = (await db.execute(select(Report).where(Report.run_id == run.id))).scalar_one_or_none()
+    from app.models import Investigation
+    inv = (await db.execute(select(Investigation).where(Investigation.run_id == run.id).order_by(Investigation.id.desc()).limit(1))).scalar_one_or_none()
     return {
+        "investigation": None if inv is None else {
+            "status": inv.status, "agent_task_id": inv.agent_task_id, "agent_execution_id": inv.agent_execution_id,
+            "summary": inv.summary, "recommendations": inv.recommendations, "records": len(inv.records),
+            "key_records": [r for r in inv.records if r.get("type") in ("FINDING", "SUMMARY", "SUGGESTION")][-15:],
+            "error": inv.error, "started_at": inv.started_at, "finished_at": inv.finished_at},
         **_run_summary(run, bug.title, repo.full_name), "nodes": run.nodes, "node_order": NODE_ORDER,
         "branch_name": run.branch_name, "base_sha": run.base_sha,
         "steps": [{"id": x.id, "node": x.node, "agent": x.agent, "status": x.status, "attempt": x.attempt, "output": x.output,

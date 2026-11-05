@@ -153,6 +153,8 @@ export interface RepoSettings {
   auto_create_issues: boolean
   auto_issue_min_severity: Severity
   require_pr_approval: boolean
+  alarm_patterns: string[]
+  auto_investigate_alarms: boolean
   comment_on_issue: boolean
   production_environment: string
   health_check_url: string | null
@@ -220,7 +222,7 @@ export interface BugDetail extends Bug {
 }
 
 export const SOURCE_LABEL: Record<string, string> = {
-  github_issue: 'GitHub issue', manual: 'Reported in DebugOps', auto_health: 'Production health', auto_test: 'Failing test', auto_semgrep: 'Code analysis',
+  github_issue: 'GitHub issue', manual: 'Reported in DebugOps', aws_alarm: 'CloudWatch alarm', auto_health: 'Production health', auto_test: 'Failing test', auto_semgrep: 'Code analysis',
   auto_gitleaks: 'Secret scan', auto_osv: 'Dependency',
 }
 export const SEVERITY_COLOR: Record<string, string> = {
@@ -231,6 +233,7 @@ export const SEVERITY_COLOR: Record<string, string> = {
 export interface RunSummary {
   id: number
   task_id: string
+  task_type: 'incident' | 'bug' | 'feature' | null
   task_title: string
   task_description: string
   base_sha: string | null
@@ -270,7 +273,14 @@ export interface Delivery {
     recent?: { at: string; ok: boolean; status: number | null; ms: number }[] }
 }
 
+export interface AwsInvestigation {
+  status: string; agent_task_id: string | null; agent_execution_id: string | null; summary: string
+  recommendations: { recommendationId?: string; title?: string; content?: string }[]; records: number
+  key_records: { type: string; text: string; at: string }[]; error: string | null; started_at: string | null; finished_at: string | null
+}
+
 export interface RunDetail extends Omit<RunSummary, 'branch_name' | 'base_sha'> {
+  investigation: AwsInvestigation | null
   nodes: Record<string, { status: string; detail?: string; attempt?: number; started_at?: string; finished_at?: string }>
   node_order: string[]
   branch_name: string | null
@@ -300,4 +310,10 @@ export function duration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   const m = Math.floor(seconds / 60)
   return m < 60 ? `${m}m ${seconds % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+export const TASK_TYPE: Record<string, { label: string; cls: string }> = {
+  incident: { label: 'Production incident', cls: 'bg-bad/15 text-bad' },
+  bug: { label: 'Bug', cls: 'bg-warn/15 text-warn' },
+  feature: { label: 'Feature', cls: 'bg-accent/15 text-accent' },
 }

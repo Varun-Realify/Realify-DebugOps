@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     devops_agent_poll_seconds: int = 30  # never faster than 30s (AWS throttling guidance)
     devops_agent_max_minutes: int = 20  # investigations take 5-8 min; give up (with partial findings) after this
 
+    # CloudWatch alarms via SNS: only these topic ARNs are accepted (empty = SNS endpoint disabled)
+    sns_topic_arns: list[str] = []
+
     @property
     def devops_agent_endpoint(self) -> str:
         return self.devops_agent_url or f"https://connect.aidevops.{self.devops_agent_region}.api.aws/mcp"

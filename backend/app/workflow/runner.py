@@ -42,10 +42,13 @@ def default_deps() -> Deps:
     from app.github.client import get_github
     from app.sandbox.runner import Sandbox
 
+    from app.integrations.devops_agent import DevOpsAgentClient
+
     s = get_settings()
     return Deps(gh=get_github(), llm=lambda: AnthropicLLM(s),
                 code_agent=lambda ws: ClaudeCodeRunner(ws.sb, ws.gateway_token, s),
-                sandbox=lambda label: Sandbox(s, label=label))
+                sandbox=lambda label: Sandbox(s, label=label),
+                devops_agent=(lambda: DevOpsAgentClient(s)) if s.devops_agent_configured else None)
 
 
 async def start_run(db: AsyncSession, bug: Bug, user_id: int | None) -> WorkflowRun | None:

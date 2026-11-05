@@ -138,7 +138,8 @@ class Sandbox:
     def __init__(self, settings: Settings, client: docker.DockerClient | None = None, label: str | None = None):
         self.s = settings
         self.client = client or docker.from_env()
-        self.name = f"debugops-sbx-{label or uuid.uuid4().hex[:12]}"
+        # Unique per creation: a run resumed after a crash must not collide with its dead predecessor's container.
+        self.name = f"debugops-sbx-{label + '-' if label else ''}{uuid.uuid4().hex[:8]}"
         self.container = None
         self.volume = None
 

@@ -206,6 +206,14 @@ function SettingsDialog({ repo, onClose }: { repo: Repository; onClose: () => vo
           {check('comment_on_issue', 'Comment on the originating GitHub issue with the PR link')}
         </fieldset>
         <fieldset className="space-y-3">
+          <legend className="label">Production incidents (CloudWatch alarms via SNS)</legend>
+          <label className="block text-sm">Alarm names belonging to this repository (glob patterns, one per line)
+            <textarea className="input mt-1 min-h-16 font-mono text-xs" placeholder="realify-api-*" value={s.alarm_patterns.join('\n')}
+              onChange={(e) => setS({ ...s, alarm_patterns: e.target.value.split('\n').map((x) => x.trim()).filter(Boolean) })} /></label>
+          {check('auto_investigate_alarms', 'Start the incident workflow automatically when a matching alarm fires',
+            'AWS DevOps Agent investigates, then Claude Code fixes, tests and opens a PR for review.')}
+        </fieldset>
+        <fieldset className="space-y-3">
           <legend className="label">After merge: deployment and production health</legend>
           <p className="text-xs text-muted">DebugOps never deploys. It records GitHub Deployments from your CD, and can watch a health URL after a production deploy.</p>
           <label className="block text-sm">Production environment name (as reported by your CD)

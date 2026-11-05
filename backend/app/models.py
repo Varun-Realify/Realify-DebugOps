@@ -264,6 +264,7 @@ class WorkflowRun(Timestamps, Base):
     branch_name: Mapped[str | None] = mapped_column(String(255))
     attempt: Mapped[int] = mapped_column(Integer, default=0)
     validation_verdict: Mapped[str | None] = mapped_column(String(20))  # verified | failed | unverifiable
+    task_type: Mapped[str | None] = mapped_column(String(20))  # incident | bug | feature (set by classification)
     # ---- audit record (snapshots at start; summaries filled as the run progresses) ----
     task_title: Mapped[str] = mapped_column(String(500), default="")  # bug as it was when the run started
     task_description: Mapped[str] = mapped_column(Text, default="")
@@ -383,3 +384,22 @@ class Integration(Timestamps, Base):
     enabled: Mapped[bool] = mapped_column(default=False)  # admin opt-in; only allowed after a successful live check
     last_check: Mapped[dict] = mapped_column(JSONB, default=dict)  # {ok, tools, missing_tools, error, checked_at, endpoint}
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Investigation(Timestamps, Base):
+    """An AWS DevOps Agent investigation (production incidents). Findings are untrusted text: shown, never executed."""
+    __tablename__ = "investigations"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("workflow_runs.id", ondelete="CASCADE"), index=True)
+    bug_id: Mapped[int | None] = mapped_column(ForeignKey("bugs.id", ondelete="SET NULL"), index=True)
+    title: Mapped[str] = mapped_column(Text)  # what was sent to the agent (incident + local context)
+    agent_task_id: Mapped[str | None] = mapped_column(String(200))
+    agent_execution_id: Mapped[str | None] = mapped_column(String(200))
+    # pending | CREATED | IN_PROGRESS | COMPLETED | FAILED | TIMED_OUT | ERROR | SKIPPED
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    records: Mapped[list] = mapped_column(JSONB, default=list)  # journal records [{type, text, at}]
+    summary: Mapped[str] = mapped_column(Text, default="")  # SUMMARY / FINDING records, condensed
+    recommendations: Mapped[list] = mapped_column(JSONB, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

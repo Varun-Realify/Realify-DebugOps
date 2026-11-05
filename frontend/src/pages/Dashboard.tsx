@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { api, duration, SOURCE_LABEL, timeAgo, type DashboardSummary, type RunSummary } from '../api'
+import { api, duration, SOURCE_LABEL, TASK_TYPE, timeAgo, type DashboardSummary, type RunSummary } from '../api'
 import { useEventStream } from '../realtime/useEventStream'
 
 // Live via WebSocket; a slow poll is only a safety net.
 const REFRESH_MS = 60000
 const STAGE: Record<string, string> = {
-  intake: 'Triaging', context: 'Preparing workspace', analysis: 'Analysing code', investigation: 'Investigating',
+  intake: 'Classifying', aws_investigation: 'AWS DevOps Agent investigating production', context: 'Preparing workspace', analysis: 'Analysing code', investigation: 'Investigating',
   root_cause: 'Confirming root cause', fix: 'Writing the fix', testing: 'Writing a regression test', validation: 'Running tests',
   security: 'Security check', review: 'Independent review', retry_gate: 'Retrying', report: 'Writing report',
   await_approval: 'Waiting for approval', open_pr: 'Opening pull request',
@@ -95,7 +95,8 @@ export default function Dashboard() {
               {runs.data?.length === 0 && <tr><td className="td py-8 text-center text-muted" colSpan={7}>No debugging tasks yet.</td></tr>}
               {runs.data?.slice(0, 12).map((r) => (
                 <tr key={r.id}>
-                  <td className="td"><Link to={`/runs/${r.id}`} className="hover:text-accent"><span className="font-mono text-xs text-muted">{r.task_id}</span> {r.task_title}</Link></td>
+                  <td className="td"><Link to={`/runs/${r.id}`} className="hover:text-accent"><span className="font-mono text-xs text-muted">{r.task_id}</span> {r.task_title}</Link>
+                    {r.task_type && <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[11px] ${TASK_TYPE[r.task_type]?.cls ?? ''}`}>{TASK_TYPE[r.task_type]?.label}</span>}</td>
                   <td className="td text-sm text-muted">{r.repository}</td>
                   <td className="td"><OutcomeBadge status={r.status} /></td>
                   <td className={`td text-sm ${r.validation_verdict === 'verified' ? 'text-ok' : r.validation_verdict ? 'text-warn' : 'text-muted'}`}>{r.validation_verdict ?? '–'}</td>

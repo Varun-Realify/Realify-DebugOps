@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from app.agents.claude_code import CodeAgentResult
 from app.agents.llm import LLMResult
+from app.workflow.classify import TaskClass
 from app.agents.schemas import (CodeAnalysis, FileRef, FixResult, Hypothesis, Investigation, ReviewVerdict, SecurityReview,
                                 TestingResult, Triage)
 from app.config import get_settings
@@ -62,14 +63,15 @@ USELESS_TEST = "import unittest\nfrom calc import mul\n\n\nclass TestMul2(unitte
 
 
 class FakeLLM:
-    def __init__(self, review="approve", security="pass", triage_real=True):
-        self.review, self.security, self.triage_real = review, security, triage_real
+    def __init__(self, review="approve", security="pass", triage_real=True, task_type="bug"):
+        self.review, self.security, self.triage_real, self.task_type = review, security, triage_real, task_type
         self.prompts: dict[str, list[str]] = {}
 
     async def structured(self, *, agent, system, prompt, schema):
         self.prompts.setdefault(agent, []).append(prompt)
         parsed = {
             "bug_hunter": lambda: Triage(is_real_bug=self.triage_real, confidence=0.95, severity="high", rationale="arith bug"),
+            "classifier": lambda: TaskClass(type=self.task_type, reason="test classification"),
             "security": lambda: SecurityReview(verdict=self.security, summary="ok"),
             "review": lambda: ReviewVerdict(verdict=self.review if isinstance(self.review, str) else self.review.pop(0),
                                             summary="looks right", issues=[]),
@@ -86,7 +88,8 @@ class FakeCodeAgent:
     async def write(self, path, content):
         await self.ws.sh(f"mkdir -p $(dirname {shlex.quote(path)}) && printf %s {shlex.quote(content)} > {shlex.quote(path)}")
 
-    async def run(self, *, agent, prompt, schema, tools, edit, on_event=None):
+    async def run(self, *, agent, prompt, schema, tools, edit, on_event=None, devops_agent=False):
+        self.script.setdefault("prompts", []).append((agent, prompt, devops_agent))
         if on_event:
             await on_event("thought", f"{agent} working")
         sc = self.script
@@ -419,3 +422,196 @@ async def test_default_flow_ai_opens_pr_and_humans_review_in_github(env, db):
     assert run.status == "awaiting_merge" and run.pr_url  # straight to PR, still never merged by DebugOps
     assert await db.scalar(select(func.count()).select_from(Approval)) == 0
     assert not any("merge" in p for p, _ in fake.git_writes)
+
+
+
+# ---------------- task classification and AWS DevOps Agent routing ----------------
+
+async def _no_sleep(_):
+    return None
+
+
+@pytest.fixture
+def devops(monkeypatch):
+    from tests.fake_devops_agent import TOKEN, FakeDevOpsAgent
+    fake = FakeDevOpsAgent()
+    url = fake.start()
+    monkeypatch.setattr(get_settings(), "devops_agent_url", url)
+    monkeypatch.setattr(get_settings(), "devops_agent_token", TOKEN)
+    yield fake
+    fake.stop()
+
+
+async def _enable_integration(db, enabled=True):
+    from app.models import Integration
+    db.add(Integration(name="aws-devops-agent", enabled=enabled, last_check={"ok": True}))
+    await db.commit()
+
+
+def aws_deps(gh, llm, script):
+    from app.integrations.devops_agent import DevOpsAgentClient
+    d = deps(gh, llm, script)
+    d.devops_agent, d.sleep = (lambda: DevOpsAgentClient(get_settings())), _no_sleep
+    return d
+
+
+async def test_production_incident_goes_through_aws_devops_agent(env, db, devops):
+    from app.models import ActivityEvent, Investigation
+    _, gh = env
+    _, bug = await setup(db, gh)
+    bug = await reload(db, Bug, bug.id)
+    bug.data = {"labels": ["incident"]}
+    await db.commit()
+    await _enable_integration(db)
+    run = await runner.start_run(db, bug, None)
+    script = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
+    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(), script))
+
+    run = await reload(db, WorkflowRun, run.id)
+    assert run.task_type == "incident" and run.status == "waiting_approval", (run.error, run.nodes)
+    assert run.nodes["aws_investigation"]["status"] == "completed"
+    inv = (await db.execute(select(Investigation))).scalar_one()
+    assert inv.status == "COMPLETED" and inv.agent_task_id == "task-123" and "Root cause" in inv.summary
+    assert inv.recommendations[0]["recommendationId"] == "rec-1"
+    assert [c[0] for c in devops.calls][0] == "investigate" and "create_access_token" not in [c[0] for c in devops.calls]
+    # Findings reach Claude Code as untrusted data; Claude Code also gets read-only MCP access for this run.
+    analyst_prompt = next(p for a, p, _ in script["prompts"] if a == "code_analyst")
+    assert "<untrusted_aws_investigation>" in analyst_prompt and "Root cause: login()" in analyst_prompt
+    assert "rm -rf" not in analyst_prompt  # recommendation bodies are not forwarded, only their titles
+    assert all(flag for a, _, flag in script["prompts"] if a in ("code_analyst", "investigation", "fix"))
+    feed = (await db.execute(select(ActivityEvent.message).where(ActivityEvent.source == "aws_devops_agent"))).scalars().all()
+    assert any("[FINDING]" in m for m in feed) and any("completed" in m for m in feed)
+
+
+async def test_normal_bug_and_feature_skip_aws(env, db, devops):
+    _, gh = env
+    _, bug = await setup(db, gh)
+    await _enable_integration(db)
+    run = await runner.start_run(db, bug, None)
+    script = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
+    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(task_type="bug"), script))  # AI classifies: bug
+    run = await reload(db, WorkflowRun, run.id)
+    assert run.task_type == "bug" and run.status == "waiting_approval"
+    assert devops.calls == []  # AWS never contacted
+    assert not any(flag for _, _, flag in script["prompts"])
+
+    bug2 = Bug(repository_id=run.repository_id, source="github_issue", title="Add mul3()", description="new helper",
+               severity="low", status="new", fingerprint="feat-1", affected_files=[], data={"labels": ["enhancement"]})
+    db.add(bug2)
+    await db.commit()
+    run2 = await runner.start_run(db, bug2, None)
+    script2 = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
+    await runner.execute(run2.id, deps=aws_deps(gh, FakeLLM(), script2))
+    run2 = await reload(db, WorkflowRun, run2.id)
+    assert run2.task_type == "feature" and devops.calls == []
+    assert "FEATURE REQUEST" in next(p for a, p, _ in script2["prompts"] if a == "fix")
+
+
+async def test_incident_with_integration_disabled_continues_without_aws(env, db, devops):
+    _, gh = env
+    _, bug = await setup(db, gh)
+    bug = await reload(db, Bug, bug.id)
+    bug.data = {"labels": ["production"]}
+    await db.commit()
+    await _enable_integration(db, enabled=False)
+    run = await runner.start_run(db, bug, None)
+    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(), {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}))
+    run = await reload(db, WorkflowRun, run.id)
+    assert run.task_type == "incident" and run.status == "waiting_approval" and devops.calls == []
+    assert "not enabled" in run.nodes["aws_investigation"]["detail"]
+
+
+# ---------------- task classification and AWS DevOps Agent routing ----------------
+
+async def _no_sleep(_):
+    return None
+
+
+@pytest.fixture
+def devops(monkeypatch):
+    from tests.fake_devops_agent import TOKEN, FakeDevOpsAgent
+    fake = FakeDevOpsAgent()
+    url = fake.start()
+    monkeypatch.setattr(get_settings(), "devops_agent_url", url)
+    monkeypatch.setattr(get_settings(), "devops_agent_token", TOKEN)
+    yield fake
+    fake.stop()
+
+
+async def _enable_integration(db, enabled=True):
+    from app.models import Integration
+    db.add(Integration(name="aws-devops-agent", enabled=enabled, last_check={"ok": True}))
+    await db.commit()
+
+
+def aws_deps(gh, llm, script):
+    from app.integrations.devops_agent import DevOpsAgentClient
+    d = deps(gh, llm, script)
+    d.devops_agent, d.sleep = (lambda: DevOpsAgentClient(get_settings())), _no_sleep
+    return d
+
+
+async def test_production_incident_goes_through_aws_devops_agent(env, db, devops):
+    from app.models import ActivityEvent, Investigation
+    _, gh = env
+    _, bug = await setup(db, gh)
+    bug = await reload(db, Bug, bug.id)
+    bug.data = {"labels": ["incident"]}
+    await db.commit()
+    await _enable_integration(db)
+    run = await runner.start_run(db, bug, None)
+    script = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
+    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(), script))
+
+    run = await reload(db, WorkflowRun, run.id)
+    assert run.task_type == "incident" and run.status == "waiting_approval", (run.error, run.nodes)
+    assert run.nodes["aws_investigation"]["status"] == "completed"
+    inv = (await db.execute(select(Investigation))).scalar_one()
+    assert inv.status == "COMPLETED" and inv.agent_task_id == "task-123" and "Root cause" in inv.summary
+    assert inv.recommendations[0]["recommendationId"] == "rec-1"
+    assert [c[0] for c in devops.calls][0] == "investigate" and "create_access_token" not in [c[0] for c in devops.calls]
+    # Findings reach Claude Code as untrusted data; Claude Code also gets read-only MCP access for this run.
+    analyst_prompt = next(p for a, p, _ in script["prompts"] if a == "code_analyst")
+    assert "<untrusted_aws_investigation>" in analyst_prompt and "Root cause: login()" in analyst_prompt
+    assert "rm -rf" not in analyst_prompt  # recommendation bodies are not forwarded, only their titles
+    assert all(flag for a, _, flag in script["prompts"] if a in ("code_analyst", "investigation", "fix"))
+    feed = (await db.execute(select(ActivityEvent.message).where(ActivityEvent.source == "aws_devops_agent"))).scalars().all()
+    assert any("[FINDING]" in m for m in feed) and any("completed" in m for m in feed)
+
+
+async def test_normal_bug_and_feature_skip_aws(env, db, devops):
+    _, gh = env
+    _, bug = await setup(db, gh)
+    await _enable_integration(db)
+    run = await runner.start_run(db, bug, None)
+    script = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
+    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(task_type="bug"), script))  # AI classifies: bug
+    run = await reload(db, WorkflowRun, run.id)
+    assert run.task_type == "bug" and run.status == "waiting_approval"
+    assert devops.calls == []  # AWS never contacted
+    assert not any(flag for _, _, flag in script["prompts"])
+
+    bug2 = Bug(repository_id=run.repository_id, source="github_issue", title="Add mul3()", description="new helper",
+               severity="low", status="new", fingerprint="feat-1", affected_files=[], data={"labels": ["enhancement"]})
+    db.add(bug2)
+    await db.commit()
+    run2 = await runner.start_run(db, bug2, None)
+    script2 = {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}
+    await runner.execute(run2.id, deps=aws_deps(gh, FakeLLM(), script2))
+    run2 = await reload(db, WorkflowRun, run2.id)
+    assert run2.task_type == "feature" and devops.calls == []
+    assert "FEATURE REQUEST" in next(p for a, p, _ in script2["prompts"] if a == "fix")
+
+
+async def test_incident_with_integration_disabled_continues_without_aws(env, db, devops):
+    _, gh = env
+    _, bug = await setup(db, gh)
+    bug = await reload(db, Bug, bug.id)
+    bug.data = {"labels": ["production"]}
+    await db.commit()
+    await _enable_integration(db, enabled=False)
+    run = await runner.start_run(db, bug, None)
+    await runner.execute(run.id, deps=aws_deps(gh, FakeLLM(), {"fixes": [GOOD_FIX], "tests": [REGRESSION_TEST]}))
+    run = await reload(db, WorkflowRun, run.id)
+    assert run.task_type == "incident" and run.status == "waiting_approval" and devops.calls == []
+    assert "not enabled" in run.nodes["aws_investigation"]["detail"]

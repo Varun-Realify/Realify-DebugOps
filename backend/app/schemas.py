@@ -118,6 +118,9 @@ class RepoSettings(BaseModel):
     health_check_interval_seconds: int = Field(default=60, ge=15, le=600)
     health_failure_threshold: int = Field(default=3, ge=1, le=20)  # consecutive failures that count as a regression
     investigate_regressions: bool = False  # start an AI run automatically for a failed post-deploy health check
+    # Production incidents from CloudWatch alarms (via SNS): alarm names (glob patterns) that belong to this repository
+    alarm_patterns: list[str] = Field(default_factory=list, max_length=50)
+    auto_investigate_alarms: bool = True  # start the incident workflow automatically when a matching alarm fires
 
     @classmethod
     def of(cls, raw: dict | None) -> "RepoSettings":
