@@ -66,7 +66,7 @@ async def clean_db():
         exists = await db.scalar(text("SELECT to_regclass('checkpoints') IS NOT NULL"))
         if exists:  # LangGraph's own tables
             await db.execute(text("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes"))
-        await db.execute(text("TRUNCATE users, sessions, audit_logs, jobs, activity_events, workers, webhook_deliveries, repositories, github_installations, scan_runs, bugs, evidence, test_runs, test_results, workflow_runs, agent_steps, fix_attempts, approvals, pull_requests, reports, gateway_tokens RESTART IDENTITY CASCADE"))
+        await db.execute(text("TRUNCATE users, sessions, audit_logs, jobs, activity_events, workers, webhook_deliveries, repositories, github_installations, scan_runs, bugs, evidence, test_runs, test_results, workflow_runs, agent_steps, fix_attempts, approvals, pull_requests, reports, gateway_tokens, integrations RESTART IDENTITY CASCADE"))
         await db.commit()
     yield
 

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app import observability
 
-from app.api import auth, bugs, dashboard, github, runs, users, ws
+from app.api import auth, bugs, dashboard, github, integrations, runs, users, ws
 from app.auth import SAFE_METHODS
 from app.config import get_settings
 
@@ -81,5 +81,6 @@ app.include_router(dashboard.router, prefix=api)
 app.include_router(github.router, prefix=api)
 app.include_router(bugs.router, prefix=api)
 app.include_router(runs.router, prefix=api)
+app.include_router(integrations.router, prefix=api)
 app.include_router(dashboard.health, prefix="/api")
 app.include_router(ws.router)

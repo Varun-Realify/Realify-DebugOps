@@ -14,6 +14,7 @@ Autonomous AI debugging and QA platform. Architecture and roadmap: [docs/ARCHITE
 | [docs/SECURITY.md](docs/SECURITY.md) | threat model and controls |
 | [docs/API.md](docs/API.md) | REST and WebSocket API reference (generated) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | design and decisions |
+| [docs/AWS_DEVOPS_AGENT.md](docs/AWS_DEVOPS_AGENT.md) | AWS DevOps Agent (MCP) for production incidents: status, setup, security |
 
 ## Run with Docker Compose
 

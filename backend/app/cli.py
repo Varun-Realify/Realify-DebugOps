@@ -2,6 +2,7 @@
 
   python -m app.cli create-admin --email admin@example.com [--name "Ops Admin"]
   python -m app.cli github-check      # verify GitHub App credentials against the live API
+  python -m app.cli devops-agent-check  # verify AWS DevOps Agent MCP connectivity (initialize + tools/list)
 
 Password is read from the DEBUGOPS_ADMIN_PASSWORD env var if set, otherwise prompted (never a CLI arg,
 so it does not land in shell history or `ps` output).
@@ -57,6 +58,20 @@ async def github_check() -> int:
     return 0
 
 
+async def devops_agent_check() -> int:
+    from app.config import get_settings
+    from app.integrations.devops_agent import DevOpsAgentClient, check_connectivity
+
+    s = get_settings()
+    res = await check_connectivity(DevOpsAgentClient(s))
+    print(f"endpoint: {res['endpoint']}  auth: {res['auth']}")
+    if res["ok"]:
+        print(f"ok: connected; {len(res['tools'])} tools: {', '.join(res['tools'])}")
+        return 0
+    print(f"error: {res['error']}", file=sys.stderr)
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -64,6 +79,7 @@ def main() -> int:
     ca.add_argument("--email", required=True)
     ca.add_argument("--name", default="")
     sub.add_parser("github-check")
+    sub.add_parser("devops-agent-check")
     args = parser.parse_args()
 
     if args.cmd == "create-admin":
@@ -82,6 +98,8 @@ def main() -> int:
         return asyncio.run(create_admin(args.email, args.name, password))
     if args.cmd == "github-check":
         return asyncio.run(github_check())
+    if args.cmd == "devops-agent-check":
+        return asyncio.run(devops_agent_check())
     return 2
 
 

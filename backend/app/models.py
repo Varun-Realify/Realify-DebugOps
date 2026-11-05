@@ -374,3 +374,12 @@ class GatewayToken(Base):
     tokens_in: Mapped[int] = mapped_column(BigInteger, default=0)
     tokens_out: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Integration(Timestamps, Base):
+    """External integrations whose connectivity must be verified before workflows may use them."""
+    __tablename__ = "integrations"
+    name: Mapped[str] = mapped_column(String(50), primary_key=True)  # e.g. aws-devops-agent
+    enabled: Mapped[bool] = mapped_column(default=False)  # admin opt-in; only allowed after a successful live check
+    last_check: Mapped[dict] = mapped_column(JSONB, default=dict)  # {ok, tools, missing_tools, error, checked_at, endpoint}
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

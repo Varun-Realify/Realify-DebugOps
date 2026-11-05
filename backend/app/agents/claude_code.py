@@ -65,6 +65,8 @@ def describe(event: dict) -> list[tuple[str, str]]:
                 out.append(("search", f"Searching for “{str(inp.get('pattern', ''))[:80]}”" + (f" in {path}" if path else "")))
             elif name in ("Glob", "LS"):
                 out.append(("search", f"Listing {inp.get('pattern') or path or 'files'}"))
+            elif name.startswith(f"mcp__{DEVOPS_AGENT_SERVER}__"):
+                out.append(("search", f"Consulting AWS DevOps Agent: {name.rsplit('__', 1)[-1]}"))
             elif name == "Bash":
                 out.append(("command", f"$ {str(inp.get('command', ''))[:300]}"))
             else:
@@ -101,6 +103,22 @@ def _parse_cli_output(output: str) -> dict:
         if obj.get("type") == "result":
             return obj
     raise AgentError(f"Claude Code produced no result: {output.strip()[-500:]}")
+
+
+DEVOPS_AGENT_SERVER = "aws-devops-agent"
+
+
+def devops_agent_mcp_config(settings: Settings, run_token: str) -> dict:
+    """MCP config for Claude Code inside a sandbox: the DevOps Agent via the gateway's read-only proxy, authenticated
+    with the per-run token. Same server key and timeout as AWS's official plugin (.mcp.json)."""
+    return {"mcpServers": {DEVOPS_AGENT_SERVER: {
+        "type": "http", "url": settings.llm_gateway_url.rstrip("/") + "/mcp/aws-devops-agent",
+        "headers": {"Authorization": f"Bearer {run_token}"}, "timeout": settings.devops_agent_timeout_seconds * 1000}}}
+
+
+def devops_agent_tool_rules() -> list[str]:
+    from app.integrations.devops_agent import READ_ONLY_TOOLS
+    return [f"mcp__{DEVOPS_AGENT_SERVER}__{t}" for t in sorted(READ_ONLY_TOOLS)]
 
 
 class ClaudeCodeRunner:
@@ -157,10 +175,14 @@ class ClaudeCodeRunner:
         return res
 
     async def run(self, *, agent: str, prompt: str, schema: type[T], tools: list[str], edit: bool,
-                  on_event=None) -> CodeAgentResult:
+                  on_event=None, devops_agent: bool = False) -> CodeAgentResult:
+        if devops_agent:  # read-only access to AWS DevOps Agent investigations, via the gateway proxy
+            tools = [*tools, *devops_agent_tool_rules()]
         base = ["--output-format", "stream-json", "--model", self.s.agent_model,
                 "--allowedTools", ",".join(tools), "--disallowedTools", ",".join(NEVER_TOOLS),
-                "--permission-mode", "acceptEdits" if edit else "default"]
+                "--permission-mode", "acceptEdits" if edit else "default", "--strict-mcp-config"]
+        if devops_agent:
+            base += ["--mcp-config", json.dumps(devops_agent_mcp_config(self.s, self.token))]
         res = await self._invoke(["-p", prompt, "--max-turns", str(self.s.claude_code_max_turns), *base], on_event)
         usage_in = usage_out = 0
         cost, turns = 0.0, 0

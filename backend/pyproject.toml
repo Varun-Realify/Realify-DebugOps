@@ -20,6 +20,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3.2.0",
     "psycopg[binary]>=3.3.8",
     "sentry-sdk>=2",
+    "mcp>=1.20",
 ]
 
 [dependency-groups]

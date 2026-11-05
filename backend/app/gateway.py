@@ -144,6 +144,98 @@ async def proxy(path: str, request: Request):
                              headers={"cache-control": "no-cache"})
 
 
+# ---------------- read-only MCP proxy to AWS DevOps Agent (for Claude Code inside sandboxes) ----------------
+
+MCP_METHODS = {"initialize", "notifications/initialized", "notifications/cancelled", "ping", "tools/list", "tools/call"}
+MCP_FORWARD_HEADERS = ("content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id")
+
+
+def _rpc_error(msg_id, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": f"DebugOps gateway: {message}"}}
+
+
+def _filter_tools(obj):
+    """Hide every tool except the read-only ones from tools/list results."""
+    from app.integrations.devops_agent import READ_ONLY_TOOLS
+    if isinstance(obj, dict) and isinstance((obj.get("result") or {}).get("tools"), list):
+        obj["result"]["tools"] = [t for t in obj["result"]["tools"] if t.get("name") in READ_ONLY_TOOLS]
+    return obj
+
+
+@app.post("/mcp/aws-devops-agent")
+async def devops_agent_mcp(request: Request):
+    """Claude Code -> (per-run token) -> here -> (real DevOps Agent token) -> AWS. Only read-only tools are allowed:
+    Claude Code can consult an investigation DebugOps started, but cannot start investigations, run mitigations or
+    touch admin tools (access tokens, agent spaces)."""
+    from app.integrations.devops_agent import READ_ONLY_TOOLS
+    if not s.devops_agent_configured:
+        return _err(503, "AWS DevOps Agent is not configured")
+    raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None
+    tok = await _authorize(raw)
+    if isinstance(tok, JSONResponse):
+        return tok
+    body = await request.body()
+    if len(body) > 1_000_000:
+        return _err(413, "request too large")
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return _err(400, "body is not JSON")
+    messages = payload if isinstance(payload, list) else [payload]
+    for m in messages:
+        method = m.get("method") if isinstance(m, dict) else None
+        if method is None:  # a response from the client (e.g. to a server request): not used here
+            return JSONResponse(_rpc_error(None, "unexpected message"), status_code=400)
+        if method not in MCP_METHODS:
+            return JSONResponse(_rpc_error(m.get("id"), f"method {method!r} not allowed"))
+        if method == "tools/call" and (m.get("params") or {}).get("name") not in READ_ONLY_TOOLS:
+            log.warning("blocked DevOps Agent tool %r for run token %s", (m.get("params") or {}).get("name"), tok.id)
+            return JSONResponse(_rpc_error(m.get("id"), f"tool {(m.get('params') or {}).get('name')!r} is not allowed (read-only access)"))
+
+    headers = {h: request.headers[h] for h in MCP_FORWARD_HEADERS if h in request.headers}
+    headers["authorization"] = f"Bearer {s.devops_agent_token}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(s.devops_agent_timeout_seconds + 30, connect=15)) as c:
+            resp = await c.post(s.devops_agent_endpoint, content=body, headers=headers)
+    except httpx.HTTPError as e:
+        return _err(502, f"AWS DevOps Agent unreachable: {type(e).__name__}")
+    out_headers = {k: v for k, v in resp.headers.items() if k.lower() == "mcp-session-id"}
+    ctype = resp.headers.get("content-type", "")
+    if resp.status_code >= 400:
+        return _err(502 if resp.status_code >= 500 else resp.status_code, f"upstream returned HTTP {resp.status_code}")
+    if "text/event-stream" in ctype:  # SSE: rewrite each data line (tools/list filtering)
+        lines = []
+        for line in resp.text.split("\n"):
+            if line.startswith("data:"):
+                try:
+                    line = "data: " + json.dumps(_filter_tools(json.loads(line[5:])))
+                except ValueError:
+                    pass
+            lines.append(line)
+        return Response("\n".join(lines), status_code=resp.status_code, media_type="text/event-stream", headers=out_headers)
+    if "application/json" in ctype and resp.content:
+        data = resp.json()
+        data = [_filter_tools(d) for d in data] if isinstance(data, list) else _filter_tools(data)
+        return JSONResponse(data, status_code=resp.status_code, headers=out_headers)
+    return Response(resp.content, status_code=resp.status_code, media_type=ctype or None, headers=out_headers)
+
+
+@app.delete("/mcp/aws-devops-agent")
+async def devops_agent_mcp_close(request: Request):
+    raw = request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None
+    tok = await _authorize(raw)
+    if isinstance(tok, JSONResponse):
+        return tok
+    sid = request.headers.get("mcp-session-id")
+    if sid and s.devops_agent_configured:
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                await c.delete(s.devops_agent_endpoint, headers={"authorization": f"Bearer {s.devops_agent_token}", "mcp-session-id": sid})
+        except httpx.HTTPError:
+            pass
+    return Response(status_code=204)
+
+
 @app.api_route("/{path:path}", methods=["GET", "PUT", "PATCH", "DELETE"])
 async def deny(path: str):
-    raise HTTPException(404, "not found")
+    raise HTTPException(404, "not found")  # includes GET /mcp/... (no server-initiated streams through the proxy)

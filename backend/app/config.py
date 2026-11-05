@@ -61,6 +61,24 @@ class Settings(BaseSettings):
     root_cause_min_confidence: float = 0.6
     max_fix_attempts: int = 3
 
+    # AWS DevOps Agent (production incident investigations) over its official remote MCP server.
+    # Bearer token (single AgentSpace) for development; SigV4/IAM for production (see docs/AWS_DEVOPS_AGENT.md).
+    devops_agent_token: str = ""  # secret: env or AWS Secrets Manager; never logged, never given to sandboxes
+    devops_agent_region: str = "ap-south-1"
+    devops_agent_url: str = ""  # default https://connect.aidevops.<region>.api.aws/mcp
+    devops_agent_auth: str = "bearer"  # bearer | sigv4 (sigv4: planned, see docs)
+    devops_agent_timeout_seconds: int = 120  # per MCP request (official plugin uses 120s)
+    devops_agent_poll_seconds: int = 30  # never faster than 30s (AWS throttling guidance)
+    devops_agent_max_minutes: int = 20  # investigations take 5-8 min; give up (with partial findings) after this
+
+    @property
+    def devops_agent_endpoint(self) -> str:
+        return self.devops_agent_url or f"https://connect.aidevops.{self.devops_agent_region}.api.aws/mcp"
+
+    @property
+    def devops_agent_configured(self) -> bool:
+        return self.devops_agent_auth == "bearer" and bool(self.devops_agent_token)
+
     @property
     def agents_configured(self) -> bool:
         return bool(self.anthropic_api_key)

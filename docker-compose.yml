@@ -82,6 +82,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      # AWS DevOps Agent: the gateway serves the read-only MCP proxy for Claude Code (token stays here)
+      DEVOPS_AGENT_TOKEN: ${DEVOPS_AGENT_TOKEN:-}
+      DEVOPS_AGENT_REGION: ${DEVOPS_AGENT_REGION:-ap-south-1}
+      DEVOPS_AGENT_URL: ${DEVOPS_AGENT_URL:-}
       RUN_MAX_LLM_REQUESTS: ${RUN_MAX_LLM_REQUESTS:-600}
       RUN_MAX_LLM_TOKENS: ${RUN_MAX_LLM_TOKENS:-8000000}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
