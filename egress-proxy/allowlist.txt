@@ -1,0 +1,9 @@
+# One domain per line; a leading dot also matches subdomains.
+# Package registries (dependency install for tests)
+.pypi.org
+.pythonhosted.org
+.npmjs.org
+registry.yarnpkg.com
+# Vulnerability database (OSV-Scanner)
+api.osv.dev
+api.deps.dev

@@ -1,0 +1,158 @@
+# Realify DebugOps — production-style stack. Copy .env.example to .env and fill it in first.
+
+# Every service logs JSON lines to stdout; rotate locally and/or switch the driver to ship them centrally
+# (e.g. loki, fluentd, awslogs, gcplogs). See docs/OPERATIONS.md#centralized-logs.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "5"}
+x-backend: &backend
+  <<: *logging
+  build: ./backend
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  depends_on:
+    postgres:
+      condition: service_healthy
+  volumes:
+    - ./secrets:/run/secrets:ro  # GitHub App private key lives here (never in the image or frontend)
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  postgres:
+    <<: *logging
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Not published to the host. Use `docker compose exec postgres psql ...` for admin access.
+
+  api:
+    <<: *backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DOCKER_HOST: tcp://docker-proxy:2375  # never the raw socket
+    volumes:
+      - ./secrets:/run/secrets:ro
+      - repo-cache:/var/lib/debugops/repos  # persistent clone per repository + per-task worktrees (never mounted into sandboxes)
+    networks: [default, docker]
+    depends_on:
+      api:
+        condition: service_healthy  # api runs migrations first
+      docker-proxy:
+        condition: service_started
+      egress-proxy:
+        condition: service_started
+      llm-gateway:
+        condition: service_started
+      sandbox-image:
+        condition: service_completed_successfully
+
+  # The sandboxes' only route to the Claude API. Holds the Anthropic key; sandboxes present a per-run token.
+  llm-gateway:
+    <<: *logging
+    build: ./backend
+    restart: unless-stopped
+    command: ["uvicorn", "app.gateway:app", "--host", "0.0.0.0", "--port", "8090"]
+    environment:  # least privilege: no GitHub key, no session secret
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      RUN_MAX_LLM_REQUESTS: ${RUN_MAX_LLM_REQUESTS:-600}
+      RUN_MAX_LLM_TOKENS: ${RUN_MAX_LLM_TOKENS:-8000000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks: [default, sandbox]
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # Only the worker can reach this. Exposes container/exec/volume endpoints, nothing else.
+  # ponytail: endpoint-level filtering only; it cannot restrict container *parameters*. Treat the worker as
+  # trusted and run DebugOps on a dedicated host (see ARCHITECTURE.md risk R1).
+  docker-proxy:
+    <<: *logging
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      VOLUMES: 1
+      POST: 1
+      IMAGES: 0
+      NETWORKS: 0
+      INFO: 0
+      VERSION: 1
+    volumes: [/var/run/docker.sock:/var/run/docker.sock:ro]
+    networks: [docker]
+
+  # The sandbox network's only way out: an allowlisting HTTP(S) proxy (egress-proxy/allowlist.txt).
+  egress-proxy:
+    <<: *logging
+    build: ./egress-proxy
+    restart: unless-stopped
+    networks: [default, sandbox]
+    read_only: true
+    tmpfs: [/tmp, /var/run, /var/cache/squid, /var/log/squid]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # Builds the sandbox image that scans run in, then exits.
+  sandbox-image:
+    build: ./sandbox
+    image: debugops-sandbox:latest
+    command: ["true"]
+    restart: "no"
+    network_mode: none
+
+  web:
+    <<: *logging
+    build: ./frontend
+    restart: unless-stopped
+    ports: ["${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8088}:8080"]
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  pgdata:
+  repo-cache:  # rebuildable from GitHub; no need to back up
+
+networks:
+  default: {}
+  docker:
+    internal: true
+  sandbox:
+    name: debugops-sandbox  # fixed name: the worker attaches sandbox containers to it
+    internal: true          # no route to the internet except through egress-proxy

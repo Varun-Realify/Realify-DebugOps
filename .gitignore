@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+node_modules/
+dist/
+*.log
+.DS_Store
+.gstack/
+backups/
+*.dump
+.ruff_cache/
+.mypy_cache/
+.gstack/
