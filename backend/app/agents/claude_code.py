@@ -112,6 +112,9 @@ class ClaudeCodeRunner:
             "NO_PROXY": f"localhost,127.0.0.1,{host}", "no_proxy": f"localhost,127.0.0.1,{host}",
             "DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CONFIG_DIR": "/tmp/.claude",
+            # Background/small-model calls must also use a model the gateway allows.
+            "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-5-5", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5",
         }
 
     async def _invoke(self, args: list[str], on_event=None) -> dict:
